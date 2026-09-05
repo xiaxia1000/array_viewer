@@ -343,6 +343,7 @@ impl<T: From<u32>, const W: usize, const H: usize> TryFrom<DynamicImage> for Scr
     }
 }
 
+#[cfg(feature = "array_from_image")]
 pub(super) fn try_from_image_inner<T: From<u32>>(raw: Vec<u8>) -> Vec<T> {
     // 将每个像素打包为 u32 并通过 `T::from` 转换
     raw

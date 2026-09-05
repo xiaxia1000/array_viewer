@@ -21,6 +21,7 @@ use image::GenericImageView;
 use std::path::Path;
 use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
 use std::ptr;
+#[cfg(feature = "array_from_image")]
 use crate::base::immutable::try_from_image_inner;
 
 /// 动态尺寸的二维像素缓冲区句柄，内存位于堆上且地址固定。

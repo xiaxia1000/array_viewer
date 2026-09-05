@@ -65,7 +65,7 @@ mod test {
     const WIDTH: usize = 320;
     const HEIGHT: usize = 240;
 
-    /// 冒烟测试：启动显示线程渲染有限帧后正常退出。
+    /// 测试：启动显示线程渲染有限帧后正常退出。
     ///
     /// 验证“主线程写像素 + 显示线程刷新”的整条流水线可以跑通。
     #[test]
@@ -109,7 +109,7 @@ mod test {
         handle.join().unwrap();
     }
 
-    /// 画笔冒烟测试：用新的键盘/鼠标状态 API 驱动绘图循环。
+    /// 画笔测试：用新的键盘/鼠标状态 API 驱动绘图循环。
     ///
     /// 运行有限帧后自动退出，验证 `get_key_state()` / `get_mouse_state()`
     /// 与 `update_signal` / `apply_signal` 的配合。
