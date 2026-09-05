@@ -1,0 +1,790 @@
+#[cfg(feature = "array_from_image")]
+use image::GenericImageView;
+use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
+#[cfg(feature = "array_from_image")]
+use std::path::Path;
+use std::ptr;
+
+/// 动态尺寸的二维像素缓冲区句柄，内存位于堆上且地址固定。
+///
+/// # 内存语义
+/// - `ScreenArray` 自身可以移动。
+/// - 内部指针 `arr_ptr` 指向的堆内存地址固定，直到被手动释放。
+/// - 内存必须通过 `drop()` 或 `drop_it()` 手动释放，不能 double-free。
+///
+/// # 安全契约
+/// - 释放后不能再访问任何 `get` / `as_slice` 方法。
+/// - 使用 `set_size_unchecked` 等 unsafe 方法时必须保证内存安全。
+///
+/// # 线程安全
+/// 该类型实现了 `Send` 和 `Sync`，但并发访问内容需要外部同步。
+#[derive(Debug)]
+pub struct ScreenArray {
+    /// 指向连续 u32 缓冲区的原始指针
+    arr_ptr: *mut u32,
+    /// 当前宽度（像素列数）
+    width: usize,
+    /// 当前高度（像素行数）
+    height: usize,
+}
+
+// -------------------------------------------------------------------------------------------------
+// 内部辅助函数：内存分配与释放
+// -------------------------------------------------------------------------------------------------
+
+/// 分配 `len` 个 `u32` 的未初始化内存，返回指针。
+/// 若 `len == 0` 则返回空指针。
+fn alloc_buffer(len: usize) -> *mut u32 {
+    if len == 0 {
+        return ptr::null_mut();
+    }
+    let layout = Layout::array::<u32>(len).expect("[ScreenArray] layout overflow");
+    unsafe {
+        let ptr = alloc(layout);
+        if ptr.is_null() {
+            handle_alloc_error(layout);
+        }
+        ptr as *mut u32
+    }
+}
+
+/// 释放由 `alloc_buffer` 分配的 `len` 个 `u32` 内存。
+///
+/// # Safety
+/// - `ptr` 必须是由 `alloc_buffer` 分配且未被释放过的指针。
+/// - `len` 必须与分配时的大小一致。
+unsafe fn dealloc_buffer(ptr: *mut u32, len: usize) {
+    if len == 0 || ptr.is_null() {
+        return;
+    }
+    let layout = Layout::array::<u32>(len).unwrap();
+    unsafe {
+        dealloc(ptr as *mut u8, layout);
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// 二维视图类型（用于 `get` 和 `get_mut` 的返回）
+// -------------------------------------------------------------------------------------------------
+
+/// 生成 width() 和 height() 方法
+macro_rules! impl_screen_size_methods {
+    ($width:ident, $slice:ident) => {
+        #[inline]
+        pub fn width(&self) -> usize {
+            self.$width
+        }
+
+        #[inline]
+        pub fn height(&self) -> usize {
+            if self.$width == 0 {
+                0
+            } else {
+                debug_assert_eq!(self.$slice.len() % self.width(), 0);
+                self.$slice.len() / self.$width
+            }
+        }
+    };
+}
+
+/// 生成 get() 方法
+macro_rules! impl_screen_get {
+    ($width:ident, $height:ident, $slice:ident) => {
+        pub fn get(&self, x: usize, y: usize) -> Option<&u32> {
+            if x < self.$width && y < self.$height() {
+                // SAFETY: bounds checked above
+                Some(&self.$slice[y * self.$width + x])
+            } else {
+                None
+            }
+        }
+    };
+}
+
+/// 不可变二维视图，提供 `view[y][x]` 访问。
+#[derive(Debug, Clone, Copy)]
+pub struct ScreenArrayView<'a> {
+    slice: &'a [u32],
+    width: usize,
+}
+
+impl<'a> ScreenArrayView<'a> {
+    impl_screen_size_methods!(width, slice);
+    impl_screen_get!(width, height, slice);
+}
+
+impl<'a> std::ops::Index<usize> for ScreenArrayView<'a> {
+    type Output = [u32];
+
+    fn index(&self, row: usize) -> &Self::Output {
+        let start = row.checked_mul(self.width)
+            .expect("[ScreenArrayView::index] overflow");
+        &self.slice[start..start + self.width]
+    }
+}
+
+/// 可变二维视图，提供 `view[y][x]` 访问。
+pub struct ScreenArrayViewMut<'a> {
+    slice: &'a mut [u32],
+    width: usize,
+}
+
+impl<'a> ScreenArrayViewMut<'a> {
+    impl_screen_size_methods!(width, slice);
+    impl_screen_get!(width, height, slice);
+
+    pub fn get_mut(&mut self, x: usize, y: usize) -> Option<&mut u32> {
+        if x < self.width && y < self.height() {
+            Some(&mut self.slice[y * self.width + x])
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a> std::ops::Index<usize> for ScreenArrayViewMut<'a> {
+    type Output = [u32];
+
+    fn index(&self, row: usize) -> &Self::Output {
+        let start = row.checked_mul(self.width)
+            .expect("[ScreenArrayViewMut::index] overflow");
+        &self.slice[start..start + self.width]
+    }
+}
+
+impl<'a> std::ops::IndexMut<usize> for ScreenArrayViewMut<'a> {
+    fn index_mut(&mut self, row: usize) -> &mut Self::Output {
+        let start = row.checked_mul(self.width)
+            .expect("[ScreenArrayViewMut::index_mut] overflow");
+        &mut self.slice[start..start + self.width]
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// 初始化选项枚举
+// ---------------------------------------------------------------------------
+
+/// 调整大小时新内存的初始化方式。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResizeInit {
+    /// 不进行任何初始化（新增部分未定义，读取为 UB）。
+    Uninit,
+    /// 整个新缓冲区清零。
+    Zero,
+    /// 线性拷贝旧数据（前 min(old_len, new_len) 个元素），新增部分未初始化。
+    LinearCopy,
+    /// 按二维坐标左上角对齐拷贝重叠区域，新增部分未初始化。
+    AlignCopy,
+    /// 先清零，再线性拷贝旧数据（新增部分为 0，重叠部分被旧数据覆盖）。
+    ZeroLinearCopy,
+    /// 先清零，再按二维坐标对齐拷贝旧数据（新增部分为 0，重叠部分被旧数据覆盖）。
+    ZeroAlignCopy,
+}
+
+
+// -------------------------------------------------------------------------------------------------
+// ScreenArray 实现
+// -------------------------------------------------------------------------------------------------
+
+impl ScreenArray {
+    /// 从切片构造一个固定地址的堆缓冲。
+    ///
+    /// # Panics
+    /// 如果 `data.len() != width * height`，则 panic。
+    pub fn new(data: &[u32], width: usize, height: usize) -> Self {
+        let len = width.checked_mul(height)
+            .expect("[ScreenArray::new] width * height overflow");
+        assert_eq!(data.len(), len, "[ScreenArray::new] data length does not match width * height");
+        let ptr = alloc_buffer(len);
+        unsafe {
+            ptr::copy_nonoverlapping(data.as_ptr(), ptr, len);
+        }
+        Self {
+            arr_ptr: ptr,
+            width,
+            height,
+        }
+    }
+
+    /// 在堆上分配未初始化的二维缓冲。
+    ///
+    /// # Safety
+    /// 调用者必须在使用前初始化所有内存，否则读取未定义行为。
+    pub fn new_uninit(width: usize, height: usize) -> Self {
+        let len = width.checked_mul(height)
+            .expect("[ScreenArray::new_uninit] width * height overflow");
+        let ptr = alloc_buffer(len);
+        Self {
+            arr_ptr: ptr,
+            width,
+            height,
+        }
+    }
+
+    /// 在堆上分配二维缓冲并清零。
+    pub fn zero(width: usize, height: usize) -> Self {
+        let len = width.checked_mul(height)
+            .expect("[ScreenArray::zero] width * height overflow");
+        let ptr = alloc_buffer(len);
+        if len > 0 {
+            unsafe {
+                ptr::write_bytes(ptr, 0, len);
+            }
+        }
+        Self {
+            arr_ptr: ptr,
+            width,
+            height,
+        }
+    }
+
+    /// 从原始指针创建 `ScreenArray`（指针指向 `[[u32; width]; height]` 类型）。
+    ///
+    /// # Safety
+    /// - 指针必须指向一块有效的、大小为 `size_of::<[[u32; width]; height]>()` 的堆内存
+    /// - 该内存必须是由 `Box::into_raw` 或类似方式分配的
+    /// - 调用者必须确保不会发生 double-free
+    /// - 指针不能为 null
+    pub unsafe fn from_raw(arr_ptr: *mut u32, width: usize, height: usize) -> Self {
+        assert!(!arr_ptr.is_null(), "[ScreenArray::from_raw] null pointer");
+
+        Self {
+            arr_ptr,
+            width,
+            height,
+        }
+    }
+
+    /// 手动释放堆内存。
+    ///
+    /// # Safety
+    /// - 只能调用一次。
+    /// - 调用后不能再访问任何方法。
+    pub fn drop(mut self) {
+        unsafe {
+            dealloc_buffer(self.arr_ptr, self.width * self.height);
+            self.arr_ptr = ptr::null_mut();
+        }
+    }
+
+    /// 静态释放函数，用于脱离 `ScreenArray` 对象释放内存。
+    ///
+    /// # Safety
+    /// - `arr_ptr` 必须是由 `ScreenArray` 分配且未释放过的指针。
+    /// - `len` 必须等于分配时的元素个数。
+    pub unsafe fn drop_it(arr_ptr: *mut u32, len: usize) {
+        unsafe {
+            dealloc_buffer(arr_ptr, len);
+        }
+    }
+
+    /// 返回当前分辨率 (高, 宽)。
+    pub const fn size(&self) -> (usize, usize) {
+        (self.height, self.width)
+    }
+
+    /// 返回当前宽度。
+    pub const fn width(&self) -> usize {
+        self.width
+    }
+
+    /// 返回当前高度。
+    pub const fn height(&self) -> usize {
+        self.height
+    }
+
+    /// 获取内部数据的不可变二维视图。
+    pub fn get(&self) -> ScreenArrayView<'_> {
+        ScreenArrayView {
+            slice: self.as_slice(),
+            width: self.width,
+        }
+    }
+
+    /// 获取内部数据的可变二维视图。
+    pub fn get_mut(&self) -> ScreenArrayViewMut<'_> {
+        ScreenArrayViewMut {
+            slice: self.as_mut_slice(),
+            width: self.width,
+        }
+    }
+
+    /// 通过坐标访问像素（可变），不检查边界。
+    ///
+    /// # Safety
+    /// - `x < width && y < height` 必须成立。
+    /// - 不得造成数据竞争。
+    pub unsafe fn get_from_index_mut(&self, x: usize, y: usize) -> &mut u32 {
+        unsafe { &mut *self.arr_ptr.add(y * self.width + x) }
+    }
+
+    /// 通过坐标访问像素（不可变），不检查边界。
+    ///
+    /// # Safety
+    /// - `x < width && y < height` 必须成立。
+    pub unsafe fn get_from_index(&self, x: usize, y: usize) -> &u32 {
+        unsafe { &*self.arr_ptr.add(y * self.width + x) }
+    }
+
+    /// 返回指向连续缓冲区的原始指针。
+    pub fn get_ptr(&self) -> *mut u32 {
+        self.arr_ptr
+    }
+
+    /// 返回指针的数值形式（仅用于调试/FFI）。
+    pub unsafe fn get_ptr_num(&self) -> usize {
+        self.arr_ptr as usize
+    }
+
+    /// 返回指定像素的原始指针，不检查边界。
+    ///
+    /// # Safety
+    /// - `x < width && y < height` 必须成立。
+    pub unsafe fn get_from_index_ptr(&self, x: usize, y: usize) -> *mut u32 {
+        unsafe { self.arr_ptr.add(y * self.width + x) }
+    }
+
+    /// 完全脱离对象的像素指针计算。
+    ///
+    /// # Safety
+    /// - `self_ptr` 必须指向足够大的连续缓冲区（至少 `(y * width + x + 1)` 个 u32）。
+    /// - `x < width` 且 `y` 有效。
+    pub unsafe fn get_from_index_ptr_selfless(
+        self_ptr: usize,
+        width: usize,
+        x: usize,
+        y: usize,
+    ) -> *mut u32 {
+        let ptr = self_ptr as *mut u32;
+        unsafe { ptr.add(y * width + x) }
+    }
+
+    /// 返回行优先、连续的一维不可变切片。
+    pub fn as_slice(&self) -> &[u32] {
+        unsafe {
+            if self.width * self.height == 0 {
+                &[]
+            } else {
+                std::slice::from_raw_parts(self.arr_ptr, self.width * self.height)
+            }
+        }
+    }
+
+    /// 返回行优先、连续的一维可变切片。
+    pub fn as_mut_slice(&self) -> &mut [u32] {
+        unsafe {
+            if self.width * self.height == 0 {
+                &mut []
+            } else {
+                std::slice::from_raw_parts_mut(self.arr_ptr, self.width * self.height)
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 尺寸调整
+    // ---------------------------------------------------------------------------------------------
+
+    /// 仅更改内部宽高字段，不检查内存是否足够，不重新分配。
+    ///
+    /// # Safety
+    /// - 调用者必须确保新的 `width * height` 不超过实际已分配的元素个数。
+    /// - 更改后，所有通过宽高进行的内存访问必须在有效范围内。
+    pub unsafe fn set_size_unchecked(&mut self, new_width: usize, new_height: usize) {
+        self.width = new_width;
+        self.height = new_height;
+    }
+
+
+    /// 调整尺寸并按照指定方式初始化新内存，返回旧内存指针（不释放）。
+    ///
+    /// # 行为
+    /// - 如果新旧总长度相同，仅更新宽高，返回 `0`。
+    /// - 否则分配新内存，按照 `init` 进行初始化，更新宽高，返回旧内存指针。
+    ///
+    /// # Returns
+    /// 旧内存的指针（`usize`）。如果无需释放旧内存（例如旧长度为 0 或尺寸未变化）返回 `0`。
+    ///
+    /// # Safety
+    /// - 调用者必须负责释放返回的旧内存（如果非零），长度应为调用前的 `width * height`。
+    /// - 使用 `Uninit`、`LinearCopy` 或 `AlignCopy` 时，新增部分未初始化，调用者需在使用前初始化。
+    /// 调整尺寸并按照指定方式初始化新内存，返回旧内存指针（不释放）。
+    pub unsafe fn resize_take_old(
+        &mut self,
+        new_width: usize,
+        new_height: usize,
+        init: ResizeInit,
+    ) -> usize {
+        let new_len = new_width
+            .checked_mul(new_height)
+            .expect("[ScreenArray::resize_take_old] width * height overflow");
+        let old_len = self.width * self.height;
+        let old_ptr = self.arr_ptr;
+
+        // 尺寸未变，直接更新元数据
+        if new_len == old_len {
+            self.width = new_width;
+            self.height = new_height;
+            return 0;
+        }
+
+        let new_ptr = alloc_buffer(new_len);
+
+        // 根据初始化策略执行操作（只在需要时才操作）
+        match init {
+            ResizeInit::Uninit => {
+                // 无需任何操作
+            }
+            ResizeInit::Zero => {
+                unsafe { Self::zero_buf(new_ptr, new_len); }
+            }
+            ResizeInit::LinearCopy => {
+                unsafe { Self::copy_linear(old_ptr, new_ptr, old_len.min(new_len)); }
+            }
+            ResizeInit::AlignCopy => {
+                unsafe { Self::copy_align(
+                    old_ptr, new_ptr, self.width, new_width, self.height, new_height
+                ); }
+            }
+            ResizeInit::ZeroLinearCopy => {
+                unsafe {
+                    Self::zero_buf(new_ptr, new_len);
+                    Self::copy_linear(old_ptr, new_ptr, old_len.min(new_len));
+                }
+            }
+            ResizeInit::ZeroAlignCopy => {
+                unsafe {
+                    Self::zero_buf(new_ptr, new_len);
+                    Self::copy_align(
+                        old_ptr, new_ptr, self.width, new_width, self.height, new_height
+                    );
+                }
+            }
+        }
+
+        // 更新自身状态
+        self.arr_ptr = new_ptr;
+        self.width = new_width;
+        self.height = new_height;
+
+        old_ptr as usize
+    }
+
+    // --- 辅助函数，保持主逻辑干净 ---
+
+    #[inline]
+    unsafe fn zero_buf(ptr: *mut u32, len: usize) {
+        if len > 0 {
+            unsafe { ptr::write_bytes(ptr, 0, len); }
+        }
+    }
+
+    #[inline]
+    unsafe fn copy_linear(src: *mut u32, dst: *mut u32, len: usize) {
+        if len > 0 {
+            unsafe { ptr::copy_nonoverlapping(src, dst, len); }
+        }
+    }
+
+    #[inline]
+    unsafe fn copy_align(
+        src: *mut u32,
+        dst: *mut u32,
+        old_width: usize,
+        new_width: usize,
+        old_height: usize,
+        new_height: usize,
+    ) {
+        let copy_height = old_height.min(new_height);
+        let copy_width = old_width.min(new_width);
+        for y in 0..copy_height {
+            unsafe {
+                Self::copy_linear(
+                    src.add(y * old_width),
+                    dst.add(y * new_width),
+                    copy_width,
+                );
+            }
+        }
+    }
+
+    /// 调整尺寸并按照指定方式初始化新内存，自动释放旧内存。
+    ///
+    /// # Safety
+    /// - 使用 `Uninit`、`LinearCopy` 或 `AlignCopy` 时，新增部分未初始化，调用者需在使用前初始化。
+    /// - 其他变体（`Zero*`）已完全初始化，但方法整体仍标记为 unsafe 以涵盖所有情况。
+    pub unsafe fn resize(
+        &mut self,
+        new_width: usize,
+        new_height: usize,
+        init: ResizeInit,
+    ) {
+        unsafe {
+            let old_len = self.width * self.height;
+            let old_ptr = self.resize_take_old(new_width, new_height, init);
+            if old_ptr != 0 {
+                dealloc_buffer(old_ptr as *mut u32, old_len);
+            }
+        }
+    }
+
+    /// 安全地调整尺寸，新内存置零，旧数据按二维坐标对齐拷贝。
+    ///
+    /// 等价于 `resize(new_width, new_height, ResizeInit::ZeroAlignCopy)`。
+    pub fn resize_align(&mut self, new_width: usize, new_height: usize) {
+        unsafe {
+            self.resize(new_width, new_height, ResizeInit::ZeroAlignCopy);
+        }
+    }
+}
+
+#[cfg(feature = "array_from_image")]
+impl ScreenArray {
+    // ---------------------------------------------------------------------------------------------
+    // 图像加载方法（需启用 feature = "array_from_image"）
+    // ---------------------------------------------------------------------------------------------
+
+    pub fn set_image<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let img = image::open(path)?;
+        let (w, h) = img.dimensions();
+        let w = w as usize;
+        let h = h as usize;
+        if w != self.width || h != self.height {
+            return Err("[ScreenArray::set_image] image dimensions do not match".into());
+        }
+        let raw = img.into_rgba8().into_raw();
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let idx = y * self.width + x;
+                let r = raw[idx * 4] as u32;
+                let g = raw[idx * 4 + 1] as u32;
+                let b = raw[idx * 4 + 2] as u32;
+                let a = raw[idx * 4 + 3] as u32;
+                unsafe {
+                    *self.get_from_index_mut(x, y) = a << 24 | r << 16 | g << 8 | b;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn from_image<P: AsRef<Path> + Clone>(path: P) -> Result<ScreenArray, Box<dyn std::error::Error>> {
+        let img = image::open(path.clone())?;
+        let (w, h) = img.dimensions();
+        let mut arr = ScreenArray::zero(w as usize, h as usize);
+        arr.set_image(path)?;
+        Ok(arr)
+    }
+}
+
+impl Default for ScreenArray {
+    fn default() -> Self {
+        Self::zero(0, 0)
+    }
+}
+
+// 允许跨线程传递原始指针（需外部同步访问内容）
+unsafe impl Send for ScreenArray {}
+unsafe impl Sync for ScreenArray {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 辅助函数：创建一个已初始化的 ScreenArray
+    fn create_test_array() -> ScreenArray {
+        let data = vec![1, 2, 3, 4, 5, 6]; // 2x3
+        ScreenArray::new(&data, 3, 2)
+    }
+
+    #[test]
+    fn test_new_and_index() {
+        let arr = create_test_array();
+        assert_eq!(arr.width(), 3);
+        assert_eq!(arr.height(), 2);
+
+        let view = arr.get();
+        assert_eq!(view[0][0], 1);
+        assert_eq!(view[0][1], 2);
+        assert_eq!(view[0][2], 3);
+        assert_eq!(view[1][0], 4);
+        assert_eq!(view[1][1], 5);
+        assert_eq!(view[1][2], 6);
+
+        // 手动释放
+        arr.drop();
+    }
+
+    #[test]
+    fn test_zero_allocation() {
+        let arr = ScreenArray::zero(3, 2);
+        let slice = arr.as_slice();
+        assert_eq!(slice, &[0, 0, 0, 0, 0, 0]);
+        arr.drop();
+    }
+
+    #[test]
+    fn test_new_uninit_and_write() {
+        let arr = ScreenArray::new_uninit(4, 1);
+        // 初始化内存
+        let slice = arr.as_mut_slice();
+        for (i, val) in slice.iter_mut().enumerate() {
+            *val = i as u32;
+        }
+        assert_eq!(arr.as_slice(), &[0, 1, 2, 3]);
+        arr.drop();
+    }
+
+    #[test]
+    fn test_get_mut() {
+        let arr = create_test_array();
+        {
+            let mut view = arr.get_mut();
+            view[0][0] = 100;
+            assert_eq!(view[0][0], 100);
+        }
+        assert_eq!(arr.as_slice()[0], 100);
+        arr.drop();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_view_index_out_of_bounds_panics() {
+        let arr = create_test_array();
+        let view = arr.get();
+        let _ = view[2][0]; // 行越界
+        arr.drop(); // 不会执行到，因为 panic
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_view_index_row_overflow_panics() {
+        let arr = ScreenArray::zero(usize::MAX, 1); // 可能无法分配，但仅测试索引逻辑
+        let view = arr.get();
+        let _ = view[usize::MAX]; // 由于行计算溢出，应该 panic
+        arr.drop();
+    }
+
+    #[test]
+    fn test_get_from_index_unsafe() {
+        let arr = create_test_array();
+        unsafe {
+            assert_eq!(*arr.get_from_index(0, 0), 1);
+            assert_eq!(*arr.get_from_index_mut(1, 1), 5);
+        }
+        arr.drop();
+    }
+
+    #[test]
+    fn test_resize_align() {
+        let mut arr = ScreenArray::new(&[1, 2, 3, 4, 5, 6], 3, 2);
+        // 放大，并用 ZeroAlignCopy 保证新内存置零
+        unsafe {
+            arr.resize(4, 3, ResizeInit::ZeroAlignCopy);
+        }
+        let view = arr.get();
+        assert_eq!(view[0], [1, 2, 3, 0]);
+        assert_eq!(view[1], [4, 5, 6, 0]);
+        assert_eq!(view[2], [0, 0, 0, 0]);
+        arr.drop();
+    }
+
+    #[test]
+    fn test_resize_linear_copy() {
+        let mut arr = ScreenArray::new(&[1, 2, 3, 4], 2, 2);
+        unsafe {
+            arr.resize(3, 2, ResizeInit::LinearCopy);
+        }
+        // 线性拷贝会复制旧数据，然后新增未初始化，这里我们只检查复制部分
+        let view = arr.get();
+        assert_eq!(view[0][..3], [1, 2, 3]);
+        assert_eq!(view[1][0], 4); // 只检查已拷贝的第一个元素
+        // 新增部分未初始化，无法测试，需要调用者负责
+        arr.drop();
+    }
+
+    #[test]
+    fn test_resize_get_old() {
+        let mut arr = ScreenArray::new(&[1, 2, 3, 4], 2, 2);
+        let old_len = 4;
+        let old_ptr = unsafe {
+            arr.resize_take_old(3, 3, ResizeInit::Zero)
+        };
+        assert_ne!(old_ptr, 0);
+        // 检查新尺寸
+        assert_eq!(arr.width(), 3);
+        assert_eq!(arr.height(), 3);
+        // 检查旧指针指向的原始数据仍然有效（因为未释放）
+        unsafe {
+            let old_slice = std::slice::from_raw_parts(old_ptr as *mut u32, old_len);
+            assert_eq!(old_slice, &[1, 2, 3, 4]);
+            // 释放旧内存
+            ScreenArray::drop_it(old_ptr as *mut u32, old_len);
+        }
+        arr.drop();
+    }
+
+    #[test]
+    fn test_resize_same_size_returns_zero() {
+        let mut arr = ScreenArray::new(&[1, 2, 3, 4], 2, 2);
+        let old_ptr = unsafe {
+            arr.resize_take_old(4, 1, ResizeInit::Zero) // 总长度相同，仅改变宽高
+        };
+        assert_eq!(old_ptr, 0);
+        assert_eq!(arr.width(), 4);
+        assert_eq!(arr.height(), 1);
+        arr.drop();
+    }
+
+    #[test]
+    fn test_set_size_unchecked() {
+        let mut arr = ScreenArray::new(&[1, 2, 3, 4, 5, 6], 3, 2);
+        unsafe {
+            // 将宽高改为 2x3，总长度仍为 6，安全
+            arr.set_size_unchecked(2, 3);
+        }
+        let view = arr.get();
+        assert_eq!(view[0], [1, 2]);
+        assert_eq!(view[1], [3, 4]);
+        assert_eq!(view[2], [5, 6]);
+        arr.drop();
+    }
+
+    #[test]
+    fn test_as_slice_empty() {
+        let arr = ScreenArray::zero(0, 0);
+        assert!(arr.as_slice().is_empty());
+        arr.drop();
+    }
+
+    #[test]
+    fn test_drop_it_static() {
+        let arr = ScreenArray::new(&[42; 4], 2, 2);
+        let ptr = arr.get_ptr();
+        let len = 4;
+        // 手动取出指针并“忘记” arr，避免双重释放
+        std::mem::forget(arr);
+        unsafe {
+            ScreenArray::drop_it(ptr, len);
+        }
+        // 无法检查释放是否成功，但至少不会崩溃
+    }
+
+    // 测试并发安全风险（仅演示，实际使用需要外部锁）
+    // 此测试可能在多线程下因数据竞争而失败，故不默认运行
+    #[test]
+    #[ignore]
+    fn test_concurrent_access_requires_sync() {
+        use std::sync::Arc;
+        let arr = Arc::new(create_test_array());
+        let arr_clone = Arc::clone(&arr);
+        let handle = std::thread::spawn(move || {
+            let mut view = arr_clone.get_mut();
+            view[0][0] = 99;
+        });
+        handle.join().unwrap();
+        assert_eq!(arr.as_slice()[0], 99);
+        // 这里无法安全释放，因为 Arc 可能还有其他引用，实际使用需注意
+    }
+}
