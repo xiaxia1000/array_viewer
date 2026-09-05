@@ -17,10 +17,10 @@
 //! ```
 
 mod viewer;
-mod screen_array;
+mod array;
 
 pub use minifb::Key;
-pub use screen_array::*;
+pub use array::*;
 pub use viewer::*;
 use crate::base::ScreenArray;
 
