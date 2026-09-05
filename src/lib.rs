@@ -78,7 +78,7 @@ mod test {
         let display = ArrayViewer::<WIDTH, HEIGHT>::new(test_data.as_ptr() as usize);
         let exchange_layer = display.get_exchange_layer();
         let running_flag = &exchange_layer.is_running;
-        let handle = display.run(None);
+        let handle = display.run(None, None);
 
         // 噪声参数
         const A: f64 = 0.003;
@@ -128,7 +128,7 @@ mod test {
         let exchange = viewer.get_exchange_layer();
 
         // 2. 启动显示线程
-        let handle = viewer.run(None);
+        let handle = viewer.run(None, None);
 
         // 等待线程真正开始运行
         while !exchange.is_running.load(Ordering::Relaxed) {

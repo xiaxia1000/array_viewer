@@ -42,7 +42,8 @@ impl<T, const W: usize, const H: usize> VisualArray<T, W, H> {
         let data = ScreenArrayBase::new(data);
         let display = ScreenArray::zero();
         let viewer = ArrayViewer::new(display.get_ptr() as usize);
-        let handle = Some(viewer.run(None)); // 使用默认窗口选项
+        // TODO: 在每渲染帧调用着色闭包
+        let handle = Some(viewer.run(None, None)); // 使用默认窗口选项
 
         let this = Self {
             data: ManuallyDrop::new(data),

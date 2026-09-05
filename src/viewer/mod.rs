@@ -29,7 +29,7 @@ use std::thread::JoinHandle;
 /// 所有与窗口的交互（包括输入、标题更新等）都通过 `ExchangeLayer` 进行跨线程通信。
 pub struct ArrayViewer<const W: usize, const H: usize> {
     ptr: usize,
-    exchange_layer: Arc<ExchangeLayer>
+    exchange_layer: Arc<ExchangeLayer>,
 }
 
 impl<const W: usize, const H: usize> ArrayViewer<W, H> {
@@ -67,7 +67,11 @@ impl<const W: usize, const H: usize> ArrayViewer<W, H> {
     ///
     /// # 返回值
     /// 线程的 `JoinHandle`，可用于等待线程结束。
-    pub fn run(&self, window_options: Option<WindowOptions>) -> JoinHandle<()> {
+    pub fn run(
+        &self,
+        window_options: Option<WindowOptions>,
+        update_do: Option<Box<dyn Fn(Arc<ExchangeLayer>) + Send>>) -> JoinHandle<()>
+    {
         let exchange_layer = self.exchange_layer.clone();
         let ptr = self.ptr;
 
@@ -101,6 +105,11 @@ impl<const W: usize, const H: usize> ArrayViewer<W, H> {
 
             // 主循环
             while window.is_open() && running.load(Ordering::Relaxed) {
+                // 每帧更新的闭包
+                if let Some(ref ud) = update_do {
+                    (*ud)(exchange_layer.clone());
+                }
+
                 // 应用主线程请求的窗口属性
                 exchange_layer.apply_to_window(&mut window);
 
