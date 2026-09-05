@@ -18,10 +18,12 @@
 
 mod viewer;
 mod array;
+mod visual;
 
 pub use minifb::Key;
 pub use array::*;
 pub use viewer::*;
+pub use visual::*;
 use crate::base::ScreenArray;
 
 /// 创建一个新的屏幕缓冲区和对应的显示实例，并返回它们的元组。
