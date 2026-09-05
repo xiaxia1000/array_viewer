@@ -4,7 +4,7 @@
 //! `Zero` 用于零初始化，`Copy` 用于安全的按位拷贝（像素类型通常为简单数值）。
 //!
 //! # 内存语义
-//! - `ScreenArray` 自身可以移动。
+//! - `ScreenArrayBase` 自身可以移动。
 //! - 内部指针 `arr_ptr` 指向的堆内存地址固定，直到被手动释放。
 //! - 内存必须通过 `drop()` 或 `drop_it()` 手动释放，不能 double-free。
 //!
@@ -24,7 +24,7 @@ use std::ptr;
 
 /// 动态尺寸的二维像素缓冲区句柄，内存位于堆上且地址固定。
 #[derive(Debug)]
-pub struct ScreenArray<T: num_traits::Zero + Copy> {
+pub struct ScreenArrayBase<T: num_traits::Zero + Copy> {
     /// 指向连续 T 缓冲区的原始指针
     arr_ptr: *mut T,
     /// 当前宽度（像素列数）
@@ -43,7 +43,7 @@ fn alloc_buffer<T>(len: usize) -> *mut T {
     if len == 0 {
         return ptr::null_mut();
     }
-    let layout = Layout::array::<T>(len).expect("[ScreenArray<T>] layout overflow");
+    let layout = Layout::array::<T>(len).expect("[ScreenArrayBaseBase<T>] layout overflow");
     unsafe {
         let ptr = alloc(layout);
         if ptr.is_null() {
@@ -74,12 +74,12 @@ unsafe fn dealloc_buffer<T>(ptr: *mut T, len: usize) {
 
 /// 不可变二维视图，提供 `view[y][x]` 访问。
 #[derive(Debug, Clone, Copy)]
-pub struct ScreenArrayView<'a, T: num_traits::Zero + Copy> {
+pub struct ScreenArrayBaseView<'a, T: num_traits::Zero + Copy> {
     slice: &'a [T],
     width: usize,
 }
 
-impl<'a, T: num_traits::Zero + Copy> ScreenArrayView<'a, T> {
+impl<'a, T: num_traits::Zero + Copy> ScreenArrayBaseView<'a, T> {
     #[inline]
     pub fn width(&self) -> usize {
         self.width
@@ -105,24 +105,24 @@ impl<'a, T: num_traits::Zero + Copy> ScreenArrayView<'a, T> {
     }
 }
 
-impl<'a, T: num_traits::Zero + Copy> std::ops::Index<usize> for ScreenArrayView<'a, T> {
+impl<'a, T: num_traits::Zero + Copy> std::ops::Index<usize> for ScreenArrayBaseView<'a, T> {
     type Output = [T];
 
     fn index(&self, row: usize) -> &Self::Output {
         let start = row
             .checked_mul(self.width)
-            .expect("[ScreenArrayView::index] overflow");
+            .expect("[ScreenArrayBaseView::index] overflow");
         &self.slice[start..start + self.width]
     }
 }
 
 /// 可变二维视图，提供 `view[y][x]` 访问。
-pub struct ScreenArrayViewMut<'a, T: num_traits::Zero + Copy> {
+pub struct ScreenArrayBaseViewMut<'a, T: num_traits::Zero + Copy> {
     slice: &'a mut [T],
     width: usize,
 }
 
-impl<'a, T: num_traits::Zero + Copy> ScreenArrayViewMut<'a, T> {
+impl<'a, T: num_traits::Zero + Copy> ScreenArrayBaseViewMut<'a, T> {
     #[inline]
     pub fn width(&self) -> usize {
         self.width
@@ -157,22 +157,22 @@ impl<'a, T: num_traits::Zero + Copy> ScreenArrayViewMut<'a, T> {
     }
 }
 
-impl<'a, T: num_traits::Zero + Copy> std::ops::Index<usize> for ScreenArrayViewMut<'a, T> {
+impl<'a, T: num_traits::Zero + Copy> std::ops::Index<usize> for ScreenArrayBaseViewMut<'a, T> {
     type Output = [T];
 
     fn index(&self, row: usize) -> &Self::Output {
         let start = row
             .checked_mul(self.width)
-            .expect("[ScreenArrayViewMut<T>::index] overflow");
+            .expect("[ScreenArrayBaseViewMut<T>::index] overflow");
         &self.slice[start..start + self.width]
     }
 }
 
-impl<'a, T: num_traits::Zero + Copy> std::ops::IndexMut<usize> for ScreenArrayViewMut<'a, T> {
+impl<'a, T: num_traits::Zero + Copy> std::ops::IndexMut<usize> for ScreenArrayBaseViewMut<'a, T> {
     fn index_mut(&mut self, row: usize) -> &mut Self::Output {
         let start = row
             .checked_mul(self.width)
-            .expect("[ScreenArrayViewMut<T>::index_mut] overflow");
+            .expect("[ScreenArrayBaseViewMut<T>::index_mut] overflow");
         &mut self.slice[start..start + self.width]
     }
 }
@@ -199,10 +199,10 @@ pub enum ResizeInit {
 }
 
 // -------------------------------------------------------------------------------------------------
-// ScreenArray 实现
+// ScreenArrayBase 实现
 // -------------------------------------------------------------------------------------------------
 
-impl<T: num_traits::Zero + Copy> ScreenArray<T> {
+impl<T: num_traits::Zero + Copy> ScreenArrayBase<T> {
     /// 从切片构造一个固定地址的堆缓冲。
     ///
     /// # Panics
@@ -210,11 +210,11 @@ impl<T: num_traits::Zero + Copy> ScreenArray<T> {
     pub fn new(data: &[T], width: usize, height: usize) -> Self {
         let len = width
             .checked_mul(height)
-            .expect("[ScreenArray<T>::new] width * height overflow");
+            .expect("[ScreenArrayBase<T>::new] width * height overflow");
         assert_eq!(
             data.len(),
             len,
-            "[ScreenArray<T>::new] data length does not match width * height"
+            "[ScreenArrayBase<T>::new] data length does not match width * height"
         );
         let ptr = alloc_buffer::<T>(len);
         unsafe {
@@ -234,7 +234,7 @@ impl<T: num_traits::Zero + Copy> ScreenArray<T> {
     pub fn new_uninit(width: usize, height: usize) -> Self {
         let len = width
             .checked_mul(height)
-            .expect("[ScreenArray<T>::new_uninit] width * height overflow");
+            .expect("[ScreenArrayBase<T>::new_uninit] width * height overflow");
         let ptr = alloc_buffer::<T>(len);
         Self {
             arr_ptr: ptr,
@@ -247,7 +247,7 @@ impl<T: num_traits::Zero + Copy> ScreenArray<T> {
     pub fn zero(width: usize, height: usize) -> Self {
         let len = width
             .checked_mul(height)
-            .expect("[ScreenArray<T>::zero] width * height overflow");
+            .expect("[ScreenArrayBase<T>::zero] width * height overflow");
         let ptr = alloc_buffer::<T>(len);
         if len > 0 {
             unsafe {
@@ -264,7 +264,7 @@ impl<T: num_traits::Zero + Copy> ScreenArray<T> {
         }
     }
 
-    /// 从原始指针创建 `ScreenArray`（指针指向连续的 `T` 数组，长度为 `width * height`）。
+    /// 从原始指针创建 `ScreenArrayBase`（指针指向连续的 `T` 数组，长度为 `width * height`）。
     ///
     /// # Safety
     /// - 指针必须指向一块有效的、大小为 `size_of::<T>() * width * height` 的堆内存
@@ -272,7 +272,7 @@ impl<T: num_traits::Zero + Copy> ScreenArray<T> {
     /// - 调用者必须确保不会发生 double-free
     /// - 指针不能为 null
     pub unsafe fn from_raw(arr_ptr: *mut T, width: usize, height: usize) -> Self {
-        assert!(!arr_ptr.is_null(), "[ScreenArray<T>::from_raw] null pointer");
+        assert!(!arr_ptr.is_null(), "[ScreenArrayBase<T>::from_raw] null pointer");
         Self {
             arr_ptr,
             width,
@@ -292,10 +292,10 @@ impl<T: num_traits::Zero + Copy> ScreenArray<T> {
         }
     }
 
-    /// 静态释放函数，用于脱离 `ScreenArray` 对象释放内存。
+    /// 静态释放函数，用于脱离 `ScreenArrayBase` 对象释放内存。
     ///
     /// # Safety
-    /// - `arr_ptr` 必须是由 `ScreenArray` 分配且未释放过的指针。
+    /// - `arr_ptr` 必须是由 `ScreenArrayBase` 分配且未释放过的指针。
     /// - `len` 必须等于分配时的元素个数。
     pub unsafe fn drop_it(arr_ptr: *mut T, len: usize) {
         unsafe {
@@ -319,16 +319,16 @@ impl<T: num_traits::Zero + Copy> ScreenArray<T> {
     }
 
     /// 获取内部数据的不可变二维视图。
-    pub fn get(&self) -> ScreenArrayView<'_, T> {
-        ScreenArrayView {
+    pub fn get(&self) -> ScreenArrayBaseView<'_, T> {
+        ScreenArrayBaseView {
             slice: self.as_slice(),
             width: self.width,
         }
     }
 
     /// 获取内部数据的可变二维视图。
-    pub fn get_mut(&self) -> ScreenArrayViewMut<'_, T> {
-        ScreenArrayViewMut {
+    pub fn get_mut(&self) -> ScreenArrayBaseViewMut<'_, T> {
+        ScreenArrayBaseViewMut {
             slice: self.as_mut_slice(),
             width: self.width,
         }
@@ -440,7 +440,7 @@ impl<T: num_traits::Zero + Copy> ScreenArray<T> {
     ) -> usize {
         let new_len = new_width
             .checked_mul(new_height)
-            .expect("[ScreenArray::resize_take_old] width * height overflow");
+            .expect("[ScreenArrayBase::resize_take_old] width * height overflow");
         let old_len = self.width * self.height;
         let old_ptr = self.arr_ptr;
 
@@ -569,7 +569,7 @@ impl<T: num_traits::Zero + Copy> ScreenArray<T> {
 // -------------------------------------------------------------------------------------------------
 
 #[cfg(feature = "array_from_image")]
-impl<T: num_traits::Zero + Copy> ScreenArray<T> {
+impl<T: num_traits::Zero + Copy> ScreenArrayBase<T> {
     /// 从指定路径加载图像，并使用提供的转换闭包将每个像素转换为 `T` 后写入当前实例。
     ///
     /// # 参数
@@ -589,7 +589,7 @@ impl<T: num_traits::Zero + Copy> ScreenArray<T> {
         let w = w as usize;
         let h = h as usize;
         if w != self.width || h != self.height {
-            return Err("[ScreenArray<T>::set_image] image dimensions do not match".into());
+            return Err("[ScreenArrayBase<T>::set_image] image dimensions do not match".into());
         }
         let raw = img.into_rgba8().into_raw();
         for y in 0..self.height {
@@ -609,22 +609,22 @@ impl<T: num_traits::Zero + Copy> ScreenArray<T> {
         Ok(())
     }
 
-    /// 从指定路径加载图像，并使用提供的转换闭包将每个像素转换为 `T`，返回一个新的 `ScreenArray`。
+    /// 从指定路径加载图像，并使用提供的转换闭包将每个像素转换为 `T`，返回一个新的 `ScreenArrayBase`。
     ///
     /// # 参数
     /// - `path`: 图像文件路径。
     /// - `converter`: 一个闭包，接收打包为 `u32` 的像素值（格式：0xAARRGGBB），返回 `T`。
     ///
     /// # 返回
-    /// - `Ok(ScreenArray<T>)` 如果图像加载成功且尺寸匹配。
+    /// - `Ok(ScreenArrayBase<T>)` 如果图像加载成功且尺寸匹配。
     /// - `Err(Box<dyn Error>)` 如果文件打开、解码失败或尺寸不匹配。
     pub fn from_image<P: AsRef<Path> + Clone, F: Fn(u32) -> T>(
         path: P,
         converter: F,
-    ) -> Result<ScreenArray<T>, Box<dyn std::error::Error>> {
+    ) -> Result<ScreenArrayBase<T>, Box<dyn std::error::Error>> {
         let img = image::open(path.clone())?;
         let (w, h) = img.dimensions();
-        let mut arr = ScreenArray::zero(w as usize, h as usize);
+        let mut arr = ScreenArrayBase::zero(w as usize, h as usize);
         arr.set_image(path, converter)?;
         Ok(arr)
     }
@@ -632,7 +632,7 @@ impl<T: num_traits::Zero + Copy> ScreenArray<T> {
 
 // 便捷转换：当 T 实现了 From<u32> 时，可以使用 TryFrom<DynamicImage> 自动转换
 #[cfg(feature = "array_from_image")]
-impl<T: num_traits::Zero + Copy + From<u32>> TryFrom<image::DynamicImage> for ScreenArray<T> {
+impl<T: num_traits::Zero + Copy + From<u32>> TryFrom<image::DynamicImage> for ScreenArrayBase<T> {
     type Error = Box<dyn std::error::Error>;
 
     fn try_from(value: image::DynamicImage) -> Result<Self, Self::Error> {
@@ -649,7 +649,7 @@ impl<T: num_traits::Zero + Copy + From<u32>> TryFrom<image::DynamicImage> for Sc
                 T::from(packed)
             })
             .collect();
-        Ok(ScreenArray::new(&pixels, w as usize, h as usize))
+        Ok(ScreenArrayBase::new(&pixels, w as usize, h as usize))
     }
 }
 
@@ -657,7 +657,7 @@ impl<T: num_traits::Zero + Copy + From<u32>> TryFrom<image::DynamicImage> for Sc
 // Default 实现
 // -------------------------------------------------------------------------------------------------
 
-impl<T: num_traits::Zero + Copy> Default for ScreenArray<T> {
+impl<T: num_traits::Zero + Copy> Default for ScreenArrayBase<T> {
     fn default() -> Self {
         Self::zero(0, 0)
     }
@@ -668,8 +668,8 @@ impl<T: num_traits::Zero + Copy> Default for ScreenArray<T> {
 // -------------------------------------------------------------------------------------------------
 
 // 允许跨线程传递原始指针（需外部同步访问内容）
-unsafe impl<T: num_traits::Zero + Copy + Send> Send for ScreenArray<T> {}
-unsafe impl<T: num_traits::Zero + Copy + Sync> Sync for ScreenArray<T> {}
+unsafe impl<T: num_traits::Zero + Copy + Send> Send for ScreenArrayBase<T> {}
+unsafe impl<T: num_traits::Zero + Copy + Sync> Sync for ScreenArrayBase<T> {}
 
 // -------------------------------------------------------------------------------------------------
 // 测试
@@ -680,10 +680,10 @@ mod tests {
     use std::ops::Add;
     use super::*;
 
-    // 辅助函数：创建一个已初始化的 ScreenArray<u32>
-    fn create_test_array() -> ScreenArray<u32> {
+    // 辅助函数：创建一个已初始化的 ScreenArrayBase<u32>
+    fn create_test_array() -> ScreenArrayBase<u32> {
         let data = vec![1, 2, 3, 4, 5, 6]; // 2x3
-        ScreenArray::new(&data, 3, 2)
+        ScreenArrayBase::new(&data, 3, 2)
     }
 
     #[test]
@@ -705,7 +705,7 @@ mod tests {
 
     #[test]
     fn test_zero_allocation() {
-        let arr = ScreenArray::<u32>::zero(3, 2);
+        let arr = ScreenArrayBase::<u32>::zero(3, 2);
         let slice = arr.as_slice();
         assert_eq!(slice, &[0, 0, 0, 0, 0, 0]);
         arr.drop();
@@ -713,7 +713,7 @@ mod tests {
 
     #[test]
     fn test_new_uninit_and_write() {
-        let arr = ScreenArray::<u32>::new_uninit(4, 1);
+        let arr = ScreenArrayBase::<u32>::new_uninit(4, 1);
         let slice = arr.as_mut_slice();
         for (i, val) in slice.iter_mut().enumerate() {
             *val = i as u32;
@@ -746,7 +746,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_view_index_row_overflow_panics() {
-        let arr = ScreenArray::<u32>::zero(usize::MAX, 1); // 分配会失败，这里仅测试索引逻辑，实际不会执行
+        let arr = ScreenArrayBase::<u32>::zero(usize::MAX, 1); // 分配会失败，这里仅测试索引逻辑，实际不会执行
         let view = arr.get();
         let _ = view[usize::MAX];
         arr.drop();
@@ -764,7 +764,7 @@ mod tests {
 
     #[test]
     fn test_resize_align() {
-        let mut arr = ScreenArray::<u32>::new(&[1, 2, 3, 4, 5, 6], 3, 2);
+        let mut arr = ScreenArrayBase::<u32>::new(&[1, 2, 3, 4, 5, 6], 3, 2);
         unsafe {
             arr.resize(4, 3, ResizeInit::ZeroAlignCopy);
         }
@@ -777,7 +777,7 @@ mod tests {
 
     #[test]
     fn test_resize_linear_copy() {
-        let mut arr = ScreenArray::<u32>::new(&[1, 2, 3, 4], 2, 2);
+        let mut arr = ScreenArrayBase::<u32>::new(&[1, 2, 3, 4], 2, 2);
         unsafe {
             arr.resize(3, 2, ResizeInit::LinearCopy);
         }
@@ -790,7 +790,7 @@ mod tests {
 
     #[test]
     fn test_resize_get_old() {
-        let mut arr = ScreenArray::<u32>::new(&[1, 2, 3, 4], 2, 2);
+        let mut arr = ScreenArrayBase::<u32>::new(&[1, 2, 3, 4], 2, 2);
         let old_len = 4;
         let old_ptr = unsafe { arr.resize_take_old(3, 3, ResizeInit::Zero) };
         assert_ne!(old_ptr, 0);
@@ -799,14 +799,14 @@ mod tests {
         unsafe {
             let old_slice = std::slice::from_raw_parts(old_ptr as *mut u32, old_len);
             assert_eq!(old_slice, &[1, 2, 3, 4]);
-            ScreenArray::<u32>::drop_it(old_ptr as *mut u32, old_len);
+            ScreenArrayBase::<u32>::drop_it(old_ptr as *mut u32, old_len);
         }
         arr.drop();
     }
 
     #[test]
     fn test_resize_same_size_returns_zero() {
-        let mut arr = ScreenArray::<u32>::new(&[1, 2, 3, 4], 2, 2);
+        let mut arr = ScreenArrayBase::<u32>::new(&[1, 2, 3, 4], 2, 2);
         let old_ptr = unsafe { arr.resize_take_old(4, 1, ResizeInit::Zero) };
         assert_eq!(old_ptr, 0);
         assert_eq!(arr.width(), 4);
@@ -816,7 +816,7 @@ mod tests {
 
     #[test]
     fn test_set_size_unchecked() {
-        let mut arr = ScreenArray::<u32>::new(&[1, 2, 3, 4, 5, 6], 3, 2);
+        let mut arr = ScreenArrayBase::<u32>::new(&[1, 2, 3, 4, 5, 6], 3, 2);
         unsafe {
             arr.set_size_unchecked(2, 3);
         }
@@ -829,19 +829,19 @@ mod tests {
 
     #[test]
     fn test_as_slice_empty() {
-        let arr = ScreenArray::<u32>::zero(0, 0);
+        let arr = ScreenArrayBase::<u32>::zero(0, 0);
         assert!(arr.as_slice().is_empty());
         arr.drop();
     }
 
     #[test]
     fn test_drop_it_static() {
-        let arr = ScreenArray::<u32>::new(&[42; 4], 2, 2);
+        let arr = ScreenArrayBase::<u32>::new(&[42; 4], 2, 2);
         let ptr = arr.get_ptr();
         let len = 4;
         std::mem::forget(arr);
         unsafe {
-            ScreenArray::<u32>::drop_it(ptr, len);
+            ScreenArrayBase::<u32>::drop_it(ptr, len);
         }
     }
 
@@ -870,7 +870,7 @@ mod tests {
 
     #[test]
     fn test_generic_custom_type() {
-        let arr = ScreenArray::<CustomPixel>::zero(2, 2);
+        let arr = ScreenArrayBase::<CustomPixel>::zero(2, 2);
         assert_eq!(arr.as_slice(), &[CustomPixel(0); 4]);
         arr.drop();
 
@@ -880,7 +880,7 @@ mod tests {
             CustomPixel(3),
             CustomPixel(4),
         ];
-        let arr2 = ScreenArray::<CustomPixel>::new(&data, 2, 2);
+        let arr2 = ScreenArrayBase::<CustomPixel>::new(&data, 2, 2);
         let view = arr2.get();
         assert_eq!(view[0][1], CustomPixel(2));
         assert_eq!(view[1][0], CustomPixel(3));

@@ -18,7 +18,7 @@ use std::path::Path;
 /// - `H`: 屏幕高度（行数）。
 ///
 /// # 内存语义（非常重要）
-/// - `ScreenArray` **自身可以移动**（即该结构体可以复制、传递）。
+/// - `ScreenArrayBase` **自身可以移动**（即该结构体可以复制、传递）。
 /// - 内部指针 `arr_ptr` 指向的堆内存地址永久固定（直到手动释放），
 ///   不受 Rust 生命周期系统管理。
 ///
@@ -38,7 +38,7 @@ use std::path::Path;
 /// 但指针所指内容的并发访问需要外部同步。
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct ScreenArray<T, const W: usize, const H: usize> {
+pub struct ScreenArrayBase<T, const W: usize, const H: usize> {
     /// 指向堆上二维数组的原始指针
     ///
     /// 该指针：
@@ -48,16 +48,16 @@ pub struct ScreenArray<T, const W: usize, const H: usize> {
 }
 
 // 主要实现块：不要求 `T` 实现特殊 trait（仅需 `Sized`）
-impl<T, const W: usize, const H: usize> ScreenArray<T, W, H> {
+impl<T, const W: usize, const H: usize> ScreenArrayBase<T, W, H> {
     const _CHECK: () = {
-        let _ = W.checked_mul(H).expect("[ScreenArray<T,W,H>] W * H overflows usize");
+        let _ = W.checked_mul(H).expect("[ScreenArrayBase<T,W,H>] W * H overflows usize");
     };
 
     /// 从栈上的二维数组构造一个固定地址的堆缓冲。
     ///
     /// # 行为
     /// - 将 `[[T; W]; H]` 从栈移动到堆。
-    /// - 放弃 Rust 的自动 drop 权（内存由 `ScreenArray` 管理）。
+    /// - 放弃 Rust 的自动 drop 权（内存由 `ScreenArrayBase` 管理）。
     /// - 返回一个“裸句柄”。
     ///
     /// # 注意
@@ -89,7 +89,7 @@ impl<T, const W: usize, const H: usize> ScreenArray<T, W, H> {
         Self { arr_ptr }
     }
 
-    /// 从原始指针创建 `ScreenArray`（指针指向 `[[T; W]; H]` 类型）。
+    /// 从原始指针创建 `ScreenArrayBase`（指针指向 `[[T; W]; H]` 类型）。
     ///
     /// # Safety
     /// - 指针必须指向一块有效的、大小为 `size_of::<[[T; W]; H]>()` 的堆内存
@@ -99,7 +99,7 @@ impl<T, const W: usize, const H: usize> ScreenArray<T, W, H> {
     pub unsafe fn from_raw(arr_ptr: *mut [[T; W]; H]) -> Self {
         assert!(
             !arr_ptr.is_null(),
-            "[ScreenArray<T,W,H>::from_raw] null pointer"
+            "[ScreenArrayBase<T,W,H>::from_raw] null pointer"
         );
         Self { arr_ptr }
     }
@@ -115,13 +115,13 @@ impl<T, const W: usize, const H: usize> ScreenArray<T, W, H> {
         }
     }
 
-    /// 脱离 `ScreenArray` 对象，仅通过指针释放内存。
+    /// 脱离 `ScreenArrayBase` 对象，仅通过指针释放内存。
     ///
     /// 用于极端场景（例如跨 FFI / 自定义资源管理器），
-    /// 此时可以不需要持有 `ScreenArray` 实例。
+    /// 此时可以不需要持有 `ScreenArrayBase` 实例。
     ///
     /// # Safety
-    /// - 传入的指针必须是由 `ScreenArray` 分配的。
+    /// - 传入的指针必须是由 `ScreenArrayBase` 分配的。
     /// - 不能重复释放。
     pub unsafe fn drop_it(arr_ptr: *mut [[T; W]; H]) {
         unsafe {
@@ -226,7 +226,7 @@ impl<T, const W: usize, const H: usize> ScreenArray<T, W, H> {
 }
 
 // 零初始化实现块：要求 `T: Zero`
-impl<T: num_traits::Zero, const W: usize, const H: usize> ScreenArray<T, W, H> {
+impl<T: num_traits::Zero, const W: usize, const H: usize> ScreenArrayBase<T, W, H> {
     /// 在堆上分配二维缓冲，并将其**按元素初始化为 `T::zero()`**。
     ///
     /// 该方法：
@@ -248,19 +248,19 @@ impl<T: num_traits::Zero, const W: usize, const H: usize> ScreenArray<T, W, H> {
 }
 
 // 默认实现：使用 `Zero` 进行零初始化
-impl<T: num_traits::Zero, const W: usize, const H: usize> Default for ScreenArray<T, W, H> {
+impl<T: num_traits::Zero, const W: usize, const H: usize> Default for ScreenArrayBase<T, W, H> {
     fn default() -> Self {
         Self::zero()
     }
 }
 
 // 安全 trait 实现：需要像素类型满足 `Send` 和 `Sync`
-unsafe impl<T: Send, const W: usize, const H: usize> Send for ScreenArray<T, W, H> {}
-unsafe impl<T: Sync, const W: usize, const H: usize> Sync for ScreenArray<T, W, H> {}
+unsafe impl<T: Send, const W: usize, const H: usize> Send for ScreenArrayBase<T, W, H> {}
+unsafe impl<T: Sync, const W: usize, const H: usize> Sync for ScreenArrayBase<T, W, H> {}
 
 // 图像加载功能（需要启用 `array_from_image` 特性）
 #[cfg(feature = "array_from_image")]
-impl<T, const W: usize, const H: usize> ScreenArray<T, W, H> {
+impl<T, const W: usize, const H: usize> ScreenArrayBase<T, W, H> {
     /// 从指定路径加载图像，并使用提供的转换闭包将每个像素转换为 `T` 后写入当前实例。
     ///
     /// # 参数
@@ -283,7 +283,7 @@ impl<T, const W: usize, const H: usize> ScreenArray<T, W, H> {
         let img = image::open(path)?;
         let (width, height) = img.dimensions();
         if width as usize != W || height as usize != H {
-            return Err("[ScreenArray<T,W,H>::set_image] image dimensions do not match".into());
+            return Err("[ScreenArrayBase<T,W,H>::set_image] image dimensions do not match".into());
         }
         let raw = img.into_rgba8().into_raw();
 
@@ -303,20 +303,20 @@ impl<T, const W: usize, const H: usize> ScreenArray<T, W, H> {
         Ok(())
     }
 
-    /// 从指定路径加载图像，并使用提供的转换闭包将每个像素转换为 `T`，返回一个新的 `ScreenArray`。
+    /// 从指定路径加载图像，并使用提供的转换闭包将每个像素转换为 `T`，返回一个新的 `ScreenArrayBase`。
     ///
     /// # 参数
     /// - `path`: 图像文件路径。
     /// - `converter`: 一个闭包，接收打包为 `u32` 的像素值（格式：0xAARRGGBB），返回 `T`。
     ///
     /// # 返回
-    /// - `Ok(ScreenArray<T, W, H>)` 如果图像加载成功且尺寸匹配。
+    /// - `Ok(ScreenArrayBase<T, W, H>)` 如果图像加载成功且尺寸匹配。
     /// - `Err(Box<dyn Error>)` 如果文件打开、解码失败或尺寸不匹配。
     pub fn from_image<P: AsRef<Path>, F: Fn(u32) -> T>(
         path: P,
         converter: F,
-    ) -> Result<ScreenArray<T, W, H>, Box<dyn std::error::Error>> {
-        let mut arr = ScreenArray::new_uninit();
+    ) -> Result<ScreenArrayBase<T, W, H>, Box<dyn std::error::Error>> {
+        let mut arr = ScreenArrayBase::new_uninit();
         arr.set_image(path, converter)?;
         Ok(arr)
     }
@@ -324,13 +324,13 @@ impl<T, const W: usize, const H: usize> ScreenArray<T, W, H> {
 
 // 可选的 `TryFrom<DynamicImage>` 实现：要求 `T: From<u32>` 作为便捷方式
 #[cfg(feature = "array_from_image")]
-impl<T: From<u32>, const W: usize, const H: usize> TryFrom<DynamicImage> for ScreenArray<T, W, H> {
+impl<T: From<u32>, const W: usize, const H: usize> TryFrom<DynamicImage> for ScreenArrayBase<T, W, H> {
     type Error = Box<dyn std::error::Error>;
 
     fn try_from(value: DynamicImage) -> Result<Self, Self::Error> {
         let (width, height) = value.dimensions();
         if width as usize != W || height as usize != H {
-            return Err("[ScreenArray<T,W,H>::try_from] image dimensions do not match".into());
+            return Err("[ScreenArrayBase<T,W,H>::try_from] image dimensions do not match".into());
         }
         let raw = value.into_rgba8().into_raw();
 
@@ -347,10 +347,10 @@ impl<T: From<u32>, const W: usize, const H: usize> TryFrom<DynamicImage> for Scr
             })
             .collect();
 
-        // 构造 ScreenArray：将 Vec<T> 的底层指针重新解释为二维数组指针
+        // 构造 ScreenArrayBase：将 Vec<T> 的底层指针重新解释为二维数组指针
         // 注意：需要确保 W * H == pixels.len()
         let ptr = pixels.leak().as_mut_ptr() as *mut [[T; W]; H];
-        Ok(unsafe { ScreenArray::from_raw(ptr) })
+        Ok(unsafe { ScreenArrayBase::from_raw(ptr) })
     }
 }
 
@@ -361,15 +361,15 @@ mod tests {
 
     #[test]
     fn zero_and_size() {
-        let arr = ScreenArray::<u32, 4, 3>::zero();
+        let arr = ScreenArrayBase::<u32, 4, 3>::zero();
         assert_eq!(arr.as_slice(), &[0u32; 12]);
-        assert_eq!(ScreenArray::<u32, 4, 3>::size(), (3, 4));
+        assert_eq!(ScreenArrayBase::<u32, 4, 3>::size(), (3, 4));
         arr.drop();
     }
 
     #[test]
     fn new_and_read_write() {
-        let arr = ScreenArray::<u32, 4, 3>::new([[1u32; 4]; 3]);
+        let arr = ScreenArrayBase::<u32, 4, 3>::new([[1u32; 4]; 3]);
         assert_eq!(arr.get()[0][0], 1);
         assert_eq!(arr.get()[2][3], 1);
 
@@ -407,11 +407,11 @@ mod tests {
 
     #[test]
     fn generic_custom_type() {
-        let arr = ScreenArray::<CustomPixel, 2, 2>::zero();
+        let arr = ScreenArrayBase::<CustomPixel, 2, 2>::zero();
         assert_eq!(arr.as_slice(), &[CustomPixel(0), CustomPixel(0), CustomPixel(0), CustomPixel(0)]);
         arr.drop();
 
-        let arr2 = ScreenArray::<CustomPixel, 2, 2>::new([
+        let arr2 = ScreenArrayBase::<CustomPixel, 2, 2>::new([
             [CustomPixel(1), CustomPixel(2)],
             [CustomPixel(3), CustomPixel(4)],
         ]);
