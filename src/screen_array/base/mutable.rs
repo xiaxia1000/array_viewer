@@ -21,6 +21,7 @@ use image::GenericImageView;
 use std::path::Path;
 use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
 use std::ptr;
+use crate::base::immutable::try_from_image_inner;
 
 /// 动态尺寸的二维像素缓冲区句柄，内存位于堆上且地址固定。
 #[derive(Debug)]
@@ -72,6 +73,40 @@ unsafe fn dealloc_buffer<T>(ptr: *mut T, len: usize) {
 // 二维视图类型（用于 `get` 和 `get_mut` 的返回）
 // -------------------------------------------------------------------------------------------------
 
+/// 生成 width() 和 height() 方法
+macro_rules! impl_screen_size_methods {
+    ($width:ident, $slice:ident) => {
+        #[inline]
+        pub fn width(&self) -> usize {
+            self.$width
+        }
+
+        #[inline]
+        pub fn height(&self) -> usize {
+            if self.$width == 0 {
+                0
+            } else {
+                debug_assert_eq!(self.$slice.len() % self.width(), 0);
+                self.$slice.len() / self.$width
+            }
+        }
+    };
+}
+
+/// 生成 get() 方法
+macro_rules! impl_screen_get {
+    ($width:ident, $height:ident, $slice:ident) => {
+        pub fn get(&self, x: usize, y: usize) -> Option<&T> {
+            if x < self.$width && y < self.$height() {
+                // SAFETY: bounds checked above
+                Some(&self.$slice[y * self.$width + x])
+            } else {
+                None
+            }
+        }
+    };
+}
+
 /// 不可变二维视图，提供 `view[y][x]` 访问。
 #[derive(Debug, Clone, Copy)]
 pub struct ScreenArrayBaseView<'a, T: num_traits::Zero + Copy> {
@@ -80,29 +115,8 @@ pub struct ScreenArrayBaseView<'a, T: num_traits::Zero + Copy> {
 }
 
 impl<'a, T: num_traits::Zero + Copy> ScreenArrayBaseView<'a, T> {
-    #[inline]
-    pub fn width(&self) -> usize {
-        self.width
-    }
-
-    #[inline]
-    pub fn height(&self) -> usize {
-        if self.width == 0 {
-            0
-        } else {
-            debug_assert_eq!(self.slice.len() % self.width, 0);
-            self.slice.len() / self.width
-        }
-    }
-
-    /// 带边界检查的像素访问。
-    pub fn get(&self, x: usize, y: usize) -> Option<&T> {
-        if x < self.width && y < self.height() {
-            Some(&self.slice[y * self.width + x])
-        } else {
-            None
-        }
-    }
+    impl_screen_size_methods!(width, slice);
+    impl_screen_get!(width, height, slice);
 }
 
 impl<'a, T: num_traits::Zero + Copy> std::ops::Index<usize> for ScreenArrayBaseView<'a, T> {
@@ -123,29 +137,8 @@ pub struct ScreenArrayBaseViewMut<'a, T: num_traits::Zero + Copy> {
 }
 
 impl<'a, T: num_traits::Zero + Copy> ScreenArrayBaseViewMut<'a, T> {
-    #[inline]
-    pub fn width(&self) -> usize {
-        self.width
-    }
-
-    #[inline]
-    pub fn height(&self) -> usize {
-        if self.width == 0 {
-            0
-        } else {
-            debug_assert_eq!(self.slice.len() % self.width, 0);
-            self.slice.len() / self.width
-        }
-    }
-
-    /// 带边界检查的不可变像素访问。
-    pub fn get(&self, x: usize, y: usize) -> Option<&T> {
-        if x < self.width && y < self.height() {
-            Some(&self.slice[y * self.width + x])
-        } else {
-            None
-        }
-    }
+    impl_screen_size_methods!(width, slice);
+    impl_screen_get!(width, height, slice);
 
     /// 带边界检查的可变像素访问。
     pub fn get_mut(&mut self, x: usize, y: usize) -> Option<&mut T> {
@@ -638,17 +631,7 @@ impl<T: num_traits::Zero + Copy + From<u32>> TryFrom<image::DynamicImage> for Sc
     fn try_from(value: image::DynamicImage) -> Result<Self, Self::Error> {
         let (w, h) = value.dimensions();
         let raw = value.into_rgba8().into_raw();
-        let pixels: Vec<T> = raw
-            .chunks_exact(4)
-            .map(|chunk| {
-                let r = chunk[0] as u32;
-                let g = chunk[1] as u32;
-                let b = chunk[2] as u32;
-                let a = chunk[3] as u32;
-                let packed = a << 24 | r << 16 | g << 8 | b;
-                T::from(packed)
-            })
-            .collect();
+        let pixels: Vec<T> = try_from_image_inner(raw);
         Ok(ScreenArrayBase::new(&pixels, w as usize, h as usize))
     }
 }

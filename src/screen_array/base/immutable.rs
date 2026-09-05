@@ -334,24 +334,28 @@ impl<T: From<u32>, const W: usize, const H: usize> TryFrom<DynamicImage> for Scr
         }
         let raw = value.into_rgba8().into_raw();
 
-        // 将每个像素打包为 u32 并通过 `T::from` 转换
-        let pixels: Vec<T> = raw
-            .chunks_exact(4)
-            .map(|chunk| {
-                let r = chunk[0] as u32;
-                let g = chunk[1] as u32;
-                let b = chunk[2] as u32;
-                let a = chunk[3] as u32;
-                let packed = a << 24 | r << 16 | g << 8 | b;
-                T::from(packed)
-            })
-            .collect();
+        let pixels: Vec<T> = try_from_image_inner(raw);
 
         // 构造 ScreenArrayBase：将 Vec<T> 的底层指针重新解释为二维数组指针
         // 注意：需要确保 W * H == pixels.len()
         let ptr = pixels.leak().as_mut_ptr() as *mut [[T; W]; H];
         Ok(unsafe { ScreenArrayBase::from_raw(ptr) })
     }
+}
+
+pub(super) fn try_from_image_inner<T: From<u32>>(raw: Vec<u8>) -> Vec<T> {
+    // 将每个像素打包为 u32 并通过 `T::from` 转换
+    raw
+        .chunks_exact(4)
+        .map(|chunk| {
+            let r = chunk[0] as u32;
+            let g = chunk[1] as u32;
+            let b = chunk[2] as u32;
+            let a = chunk[3] as u32;
+            let packed = a << 24 | r << 16 | g << 8 | b;
+            T::from(packed)
+        })
+        .collect()
 }
 
 #[cfg(test)]
