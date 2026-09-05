@@ -12,6 +12,7 @@ use crate::conversion::flatten;
 use crate::unsafe_pointer::UnsafePointerHandler;
 
 /// 可视化的二维数组，用于展示类型 `T` 的元素。
+/// 设计上相当于自动管理数组和线程生命周期的包装，应视为是ScreenArray和ArrayViewer的语法糖
 ///
 /// # 泛型参数
 /// - `T`: 数据像素类型，无特殊 trait 约束（只需 `Sized`）。

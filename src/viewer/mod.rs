@@ -50,6 +50,7 @@ impl<const W: usize, const H: usize> ArrayViewer<W, H> {
         }
     }
 
+    // TODO: 把update_hook的闭包放到exchang_layer中，由Mutex持有，渲染线程应有一个hook的缓存用于在try_lock失败时复用
     /// 启动显示线程，返回线程句柄。
     ///
     /// 该方法不会消耗 `self`，因此可以在启动后继续调用 `fps()` 或通过 `exchange_layer` 控制。
@@ -70,7 +71,7 @@ impl<const W: usize, const H: usize> ArrayViewer<W, H> {
     pub fn run(
         &self,
         window_options: Option<WindowOptions>,
-        update_do: Option<Box<dyn Fn(Arc<ExchangeLayer>) + Send>>) -> JoinHandle<()>
+        update_hook: Option<Box<dyn Fn(Arc<ExchangeLayer>) + Send>>) -> JoinHandle<()>
     {
         let exchange_layer = self.exchange_layer.clone();
         let ptr = self.ptr;
@@ -106,8 +107,8 @@ impl<const W: usize, const H: usize> ArrayViewer<W, H> {
             // 主循环
             while window.is_open() && running.load(Ordering::Relaxed) {
                 // 每帧更新的闭包
-                if let Some(ref ud) = update_do {
-                    (*ud)(exchange_layer.clone());
+                if let Some(ref uh) = update_hook {
+                    (*uh)(exchange_layer.clone());
                 }
 
                 // 应用主线程请求的窗口属性
