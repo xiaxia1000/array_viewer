@@ -7,51 +7,56 @@ use std::mem::ManuallyDrop;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use num_traits::Zero;
+use crate::conversion::flatten;
+use crate::unsafe_pointer::UnsafePointerHandler;
 
 /// 可视化的二维数组，用于展示类型 `T` 的元素。
 ///
 /// # 泛型参数
 /// - `T`: 数据像素类型，无特殊 trait 约束（只需 `Sized`）。
 /// - `W`, `H`: 固定宽度和高度（编译期常量）。
-/// - `F`: 转换闭包类型，`Fn(&T) -> u32`，将数据像素转换为 ARGB 颜色值。
 ///
 /// # 线程模型
 /// - 构造时自动启动一个显示线程，独立渲染 `display` 缓冲区。
 /// - 数据缓冲区 `data` 由主线程独占，修改后需调用 `update_display()` 刷新。
 /// - `drop` 时自动停止线程并释放所有堆内存。
-pub struct VisualArray<T, const W: usize, const H: usize> {
+pub struct VisualArray<T: 'static + Zero, const W: usize, const H: usize> {
     data: ManuallyDrop<ScreenArrayBase<T, W, H>>,
     display: ManuallyDrop<ScreenArray<W, H>>,
     viewer: ArrayViewer<W, H>,
-    converter: Box<dyn Fn(&T) -> u32>,
     handle: Option<JoinHandle<()>>,
 }
 
-impl<T, const W: usize, const H: usize> VisualArray<T, W, H> {
+impl<T: 'static + Zero, const W: usize, const H: usize> VisualArray<T, W, H> {
     /// 使用初始二维数组和转换闭包创建可视数组。
     ///
     /// 内部会：
     /// 1. 创建数据缓冲区并复制初始数据。
     /// 2. 创建显示缓冲区（全零，稍后刷新）。
     /// 3. 启动显示线程，指向显示缓冲区。
-    /// 4. 调用 `update_display()` 初始化显示内容。
     ///
     /// # Panics
     /// 若窗口创建失败（如不支持的分辨率）则会 panic。
-    pub fn new(data: [[T; W]; H], converter: Box<dyn Fn(&T) -> u32 + Send>) -> Self {
-        let data = ScreenArrayBase::new(data);
+    pub fn new(converter: Box<dyn Fn(&T) -> u32 + Send>) -> Self {
+        let data = ScreenArrayBase::zero();
         let display = ScreenArray::zero();
         let viewer = ArrayViewer::new(display.get_ptr() as usize);
-        
-        // TODO: 在每渲染帧调用着色闭包
-        let data_slice = data.as_slice();
-        let display_slice = display.as_mut_slice();
+
+        // TODO: 需要更优雅地实现，以下只是临时的。需要分Tile处理再拷贝以防止过多cache miss，需要完善['ArrayViewer']中的闭包调用与替换规则以获得良好的拓展性与约束
+        let data_slice = unsafe {
+            UnsafePointerHandler::from_mut_ptr(data.get_ptr())
+        };
+        let display_slice = unsafe {
+            UnsafePointerHandler::from_mut_ptr(display.get_ptr())
+        };
         let handle = Some(viewer.run(
             None,
             Some(Box::new(move |_| {
-                
-                for (i, val) in data_slice.iter().enumerate() {
-                    display_slice[i] = (converter)(val);
+                unsafe {
+                    for (i, val) in flatten(data_slice.deref()).iter().enumerate() {
+                        display_slice.deref_mut()[i / W][i % W] = converter(val);
+                    }
                 }
             })),
         )); // 使用默认窗口选项
@@ -60,41 +65,9 @@ impl<T, const W: usize, const H: usize> VisualArray<T, W, H> {
             data: ManuallyDrop::new(data),
             display: ManuallyDrop::new(display),
             viewer,
-            converter,
             handle,
         };
-        this.update_display();
         this
-    }
-
-    /// 更新显示缓冲区：遍历数据，应用转换闭包，填充显示缓冲区。
-    pub fn update_display(&self) {
-        let data_slice = self.data.as_slice();
-        let display_slice = self.display.as_mut_slice();
-        for (i, val) in data_slice.iter().enumerate() {
-            display_slice[i] = (self.converter)(val);
-        }
-    }
-
-    /// 通过闭包修改数据并自动刷新显示。
-    ///
-    /// 这是推荐的数据修改方式，能保证显示与数据一致。
-    ///
-    /// # 示例
-    /// ```no_run
-    /// # use array_viewer::visual::VisualArray;
-    /// # let mut vis = VisualArray::<u8, 10, 10, _>::new([[0;10];10], |&v| v as u32);
-    /// vis.modify_data(|data| {
-    ///     // 例如：将左上角像素设为 255
-    ///     unsafe { *data.get_from_index_mut(0,0) = 255; }
-    /// });
-    /// ```
-    pub fn modify_data<G>(&mut self, f: G)
-    where
-        G: FnOnce(&mut ScreenArrayBase<T, W, H>),
-    {
-        f(&mut *self.data);
-        self.update_display();
     }
 
     /// 获取数据的可变引用（需手动调用 `update_display` 才能刷新）。
@@ -138,7 +111,7 @@ impl<T, const W: usize, const H: usize> VisualArray<T, W, H> {
     }
 }
 
-impl<T, const W: usize, const H: usize> Drop for VisualArray<T, W, H> {
+impl<T: 'static + Zero, const W: usize, const H: usize> Drop for VisualArray<T, W, H> {
     fn drop(&mut self) {
         // 1. 停止渲染线程
         self.stop();
