@@ -38,12 +38,23 @@ impl<T, const W: usize, const H: usize> VisualArray<T, W, H> {
     ///
     /// # Panics
     /// 若窗口创建失败（如不支持的分辨率）则会 panic。
-    pub fn new(data: [[T; W]; H], converter: Box<dyn Fn(&T) -> u32>) -> Self {
+    pub fn new(data: [[T; W]; H], converter: Box<dyn Fn(&T) -> u32 + Send>) -> Self {
         let data = ScreenArrayBase::new(data);
         let display = ScreenArray::zero();
         let viewer = ArrayViewer::new(display.get_ptr() as usize);
+        
         // TODO: 在每渲染帧调用着色闭包
-        let handle = Some(viewer.run(None, None)); // 使用默认窗口选项
+        let data_slice = data.as_slice();
+        let display_slice = display.as_mut_slice();
+        let handle = Some(viewer.run(
+            None,
+            Some(Box::new(move |_| {
+                
+                for (i, val) in data_slice.iter().enumerate() {
+                    display_slice[i] = (converter)(val);
+                }
+            })),
+        )); // 使用默认窗口选项
 
         let this = Self {
             data: ManuallyDrop::new(data),
