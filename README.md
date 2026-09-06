@@ -161,7 +161,3 @@ at your option.
 
 `SPDX-License-Identifier: MIT OR Apache-2.0`
 
-> Publishing tip: consider adding `LICENSE-MIT` and `LICENSE-APACHE` files
-> (with your name & year) next to this README.
-> 发布提示：建议在本仓库中补充 `LICENSE-MIT` 与 `LICENSE-APACHE` 许可证文件
-> （填入你的署名与年份）。
