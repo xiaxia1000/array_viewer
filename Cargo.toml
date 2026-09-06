@@ -12,6 +12,7 @@ chrono = "0.4.44"
 minifb = "0.28.0"
 image = { version = "0.25.10", optional = true }
 num-traits = "0.2.19"
+atomic_float = "1.1.0"
 
 [dev-dependencies]
 noise = "0.9.0"

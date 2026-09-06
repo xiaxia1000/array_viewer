@@ -1,24 +1,22 @@
 //! 定义主线程与显示线程之间的数据交换层。
 
-use std::any::type_name;
+pub(crate) use crate::viewer::exchange_layer::hook::{box_hook, UpdateHook};
 use crate::viewer::exchange_layer::key_state::{KeyState, KeyStateDirtyMap};
 use crate::viewer::exchange_layer::mouse_state::{MouseState, MouseStateDirtyMap};
-use crate::viewer::exchange_layer::passed_f32::AtomicF32;
+use crate::viewer::exchange_layer::signal::{ApplyFlag, ApplySignal, ApplySignalNonAtomic, UpdateFlag, UpdateSignal, UpdateSignalNonAtomic};
 use minifb::{CursorStyle, MouseButton, MouseMode, Window};
+use std::any::type_name;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use crate::viewer::exchange_layer::signal::{ApplyFlag, ApplySignal, ApplySignalNonAtomic, UpdateFlag, UpdateSignal, UpdateSignalNonAtomic};
-
-mod hook;
-pub(crate) use hook::SharedUpdateHook;
+use atomic_float::AtomicF32;
 
 pub mod key_state;
 pub mod passed_f32;
 pub mod mouse_state;
 pub mod signal;
-
+mod hook;
 
 /// 用于在主线程和显示线程之间交换状态的结构体。
 ///
@@ -77,10 +75,14 @@ pub struct ExchangeLayer {
     pub is_running: AtomicBool,
     /// 更新钩子：显示线程每帧开始执行一次的用户闭包。
     ///
-    /// 由主线程通过 [`set_update_hook`](Self::set_update_hook) /
-    /// [`clear_update_hook`](Self::clear_update_hook) 整体替换或清除。
-    /// 渲染线程会缓存最近一次成功获取的句柄，以便在 `try_lock` 失败时复用。
-    pub(crate) update_hook: Mutex<Option<SharedUpdateHook>>,
+    /// 采用“邮箱 + 代数”模型：
+    /// - 主线程通过 [`set_update_hook`](Self::set_update_hook) /
+    ///   [`clear_update_hook`](Self::clear_update_hook) 写邮箱并递增 [`hook_epoch`](Self::hook_epoch)；
+    /// - 渲染线程只在代数变化时才取锁领取钩子（缓存在线程本地），因此绝大多数
+    ///   帧都不会触碰这把锁；领取失败（`try_lock` 竞争）时沿用上一份缓存。
+    pub(crate) update_hook: Mutex<Option<UpdateHook>>,
+    /// 更新钩子的代数：每次设置 / 清除时递增，供渲染线程判断是否需要重新领取钩子。
+    pub(crate) hook_epoch: AtomicUsize,
 }
 
 impl ExchangeLayer {
@@ -110,6 +112,7 @@ impl ExchangeLayer {
             is_active: Default::default(),
             is_running: Default::default(),
             update_hook: Mutex::new(None),
+            hook_epoch: AtomicUsize::new(0),
         }
     }
 
@@ -124,29 +127,38 @@ impl ExchangeLayer {
     ///
     /// 与早期把钩子作为 `ArrayViewer::run` 参数传递的方式不同，钩子存放在
     /// 交换层中，可以在显示线程启动前**预先注册**，也可以在运行期间随时
-    /// **替换**，无需重启窗口。
+    /// **替换**或清除，无需重启窗口。
     ///
     /// # 参数
-    /// - `hook`: 一段 `Fn(Arc<ExchangeLayer>)` 闭包，收到显示线程当前的
-    ///   交换层引用。通常用于按需刷新/同步数据。
+    /// - `hook`: 一段 `Fn(&mut Window)` 闭包，显示线程每帧调用时传入当前窗口的
+    ///   可变引用。钩子可直接读写窗口（读取键鼠输入、修改标题等）；若还需要
+    ///   访问交换层，请在创建闭包时通过 `get_exchange_layer()` 自行捕获。
     ///
     /// # 线程安全
-    /// 闭包只需满足 `Send`（不必 `Sync`），调用会被内部互斥锁串行化。
-    pub fn set_update_hook(&self, hook: impl Fn(Arc<ExchangeLayer>) + Send + 'static) {
-        let mut guard = self
-            .update_hook
-            .lock()
-            .expect("[ExchangeLayer::set_update_hook] update_hook mutex poisoned");
-        *guard = Some(SharedUpdateHook::new(hook));
+    /// 闭包只需满足 `Send`（不必 `Sync`）。钩子被渲染线程以“邮箱 + 代数”方式
+    /// 领取后由该线程独占调用，不会发生并发调用。
+    pub fn set_update_hook(&self, hook: impl Fn(&mut Window) + Send + 'static) {
+        {
+            let mut guard = self
+                .update_hook
+                .lock()
+                .expect("[ExchangeLayer::set_update_hook] update_hook mutex poisoned");
+            *guard = Some(box_hook(hook));
+        }
+        // 递增代数，通知渲染线程换用新钩子
+        self.hook_epoch.fetch_add(1, Ordering::Relaxed);
     }
 
     /// 清除当前更新钩子，渲染线程在后续帧将不再执行任何钩子。
     pub fn clear_update_hook(&self) {
-        let mut guard = self
-            .update_hook
-            .lock()
-            .expect("[ExchangeLayer::clear_update_hook] update_hook mutex poisoned");
-        *guard = None;
+        {
+            let mut guard = self
+                .update_hook
+                .lock()
+                .expect("[ExchangeLayer::clear_update_hook] update_hook mutex poisoned");
+            *guard = None;
+        }
+        self.hook_epoch.fetch_add(1, Ordering::Relaxed);
     }
 
 
@@ -205,15 +217,15 @@ impl ExchangeLayer {
 
     pub(crate) fn update_mouse_pos(&self, window: &Window) {
         if let Some((x, y)) = window.get_unscaled_mouse_pos(MouseMode::Discard) {
-            self.mouse_pos.0.set(x);
-            self.mouse_pos.1.set(y);
+            self.mouse_pos.0.store(x, Ordering::Relaxed);
+            self.mouse_pos.1.store(y, Ordering::Relaxed);
         }
     }
 
     pub(crate) fn update_scaled_mouse_pos(&self, window: &Window) {
         if let Some((x, y)) = window.get_mouse_pos(MouseMode::Discard) {
-            self.scaled_mouse_pos.0.set(x);
-            self.scaled_mouse_pos.1.set(y);
+            self.scaled_mouse_pos.0.store(x, Ordering::Relaxed);
+            self.scaled_mouse_pos.1.store(y, Ordering::Relaxed);
         }
     }
 
@@ -229,8 +241,8 @@ impl ExchangeLayer {
 
     pub(crate) fn update_scroll_wheel(&self, window: &Window) {
         if let Some((x, y)) = window.get_scroll_wheel() {
-            self.scroll_wheel.0.set(x);
-            self.scroll_wheel.1.set(y);
+            self.scroll_wheel.0.store(x, Ordering::Relaxed);
+            self.scroll_wheel.1.store(y, Ordering::Relaxed);
         }
     }
 
@@ -313,5 +325,69 @@ impl ExchangeLayer {
             }
             thread::sleep(Self::RETRY_DELAY);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 构造一个空钩子：接收窗口可变引用但不做任何事。
+    fn dummy_hook() -> impl Fn(&mut Window) + Send {
+        |_window: &mut Window| {}
+    }
+
+    /// 模拟渲染线程的“邮箱 + 代数”领取逻辑：代数变化时领取并更新本地缓存。
+    fn adopt(layer: &ExchangeLayer, cache: &mut Option<UpdateHook>, epoch: &mut usize) {
+        let e = layer.hook_epoch.load(Ordering::Relaxed);
+        if e != *epoch {
+            *cache = layer.update_hook.try_lock().unwrap().take();
+            *epoch = layer.hook_epoch.load(Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn update_hook_default_empty_epoch_zero() {
+        let layer = ExchangeLayer::new();
+        assert!(layer.update_hook.try_lock().unwrap().is_none());
+        assert_eq!(layer.hook_epoch.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn update_hook_set_then_clear_bumps_epoch() {
+        let layer = ExchangeLayer::new();
+
+        layer.set_update_hook(dummy_hook());
+        assert!(layer.update_hook.try_lock().unwrap().is_some());
+        assert_eq!(layer.hook_epoch.load(Ordering::Relaxed), 1);
+
+        layer.clear_update_hook();
+        assert!(layer.update_hook.try_lock().unwrap().is_none());
+        assert_eq!(layer.hook_epoch.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn renderer_adopts_replace_and_clear() {
+        let layer = ExchangeLayer::new();
+        let mut cache: Option<UpdateHook> = None;
+        let mut epoch = 0usize;
+
+        // 设置 → 领取：邮箱被清空，缓存持有钩子
+        layer.set_update_hook(dummy_hook());
+        adopt(&layer, &mut cache, &mut epoch);
+        assert!(cache.is_some());
+        assert!(layer.update_hook.try_lock().unwrap().is_none());
+
+        // 替换 → 代数递增，可再次领取新钩子
+        layer.set_update_hook(dummy_hook());
+        adopt(&layer, &mut cache, &mut epoch);
+        assert!(cache.is_some());
+        assert_eq!(epoch, 2);
+
+        // 清除 → 领取到 None，缓存被清空
+        layer.clear_update_hook();
+        adopt(&layer, &mut cache, &mut epoch);
+        assert!(cache.is_none());
+        assert_eq!(epoch, 3);
     }
 }

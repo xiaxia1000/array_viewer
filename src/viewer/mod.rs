@@ -2,7 +2,7 @@
 
 pub(crate) mod exchange_layer;
 
-use crate::viewer::exchange_layer::{ExchangeLayer, SharedUpdateHook};
+use crate::viewer::exchange_layer::{ExchangeLayer, UpdateHook};
 use chrono::Local;
 use minifb::{Window, WindowOptions};
 #[cfg(feature = "view_shot")]
@@ -57,10 +57,13 @@ impl<const W: usize, const H: usize> ArrayViewer<W, H> {
     /// # 更新钩子
     /// 需要每帧执行的用户逻辑（例如把数据缓冲区转换到显示缓冲区）**不再作为参数传入**，
     /// 而是在调用本方法前通过 [`ExchangeLayer::set_update_hook`] 注册到交换层：
-    /// - 这样钩子可以在窗口启动前预先注册；
-    /// - 也可以在窗口运行期间被主线程随时替换，无需重启窗口；
-    /// - 渲染线程内部缓存最近一次成功获取的钩子句柄，当读取钩子时发生锁竞争
-    ///   （`try_lock` 失败）会复用该缓存，避免整帧跳过更新。
+    /// - 钩子接收当前窗口的可变引用 `&mut Window`，可直接执行窗口级操作；
+    ///   若需访问交换层，创建闭包时用 `get_exchange_layer()` 捕获即可；
+    /// - 钩子可以在窗口启动前预先注册，也可以在窗口运行期间被主线程随时替换/清除，
+    ///   无需重启窗口；
+    /// - 渲染线程按“邮箱 + 代数”模型领取钩子并缓存在线程本地：仅在
+    ///   `ExchangeLayer` 的代数变化时才取锁；`try_lock` 失败（主线程正在写入）时
+    ///   复用上一份缓存，避免整帧跳过更新。
     ///
     /// # 线程内部逻辑
     /// 1. 根据配置创建 [`Window`]。
@@ -110,21 +113,30 @@ impl<const W: usize, const H: usize> ArrayViewer<W, H> {
             // 设置运行标志位
             running.store(true, Ordering::Relaxed);
 
-            // 钩子缓存：最近一次成功获取的共享句柄。
-            // 当 try_lock 失败（主线程正在设置/替换钩子）时沿用该缓存，保证本帧仍执行钩子。
-            let mut hook_cache: Option<SharedUpdateHook> = None;
+            // 钩子缓存：渲染线程在“邮箱 + 代数”模型下领取并独占的钩子。
+            // 仅当代数（hook_epoch）变化时才重新领取；try_lock 失败则沿用旧缓存，
+            // 避免本帧跳过钩子。
+            let mut hook_cache: Option<UpdateHook> = None;
+            let mut hook_epoch = 0usize;
 
             // 主循环
             while window.is_open() && running.load(Ordering::Relaxed) {
-                // 刷新钩子缓存：成功取锁则同步最新钩子；失败则复用旧缓存
-                match exchange_layer.update_hook.try_lock() {
-                    Ok(guard) => hook_cache = guard.as_ref().cloned(),
-                    Err(_) => { /* 锁竞争：沿用上一份缓存 */ }
+                // 代数变化 → 钩子被设置/替换/清除，尝试从邮箱领取最新钩子
+                let epoch = exchange_layer.hook_epoch.load(Ordering::Relaxed);
+                if epoch != hook_epoch {
+                    match exchange_layer.update_hook.try_lock() {
+                        Ok(mut guard) => {
+                            hook_cache = guard.take();
+                            // 以锁内最新代数同步缓存（避免与主线程竞态导致重复领取）
+                            hook_epoch = exchange_layer.hook_epoch.load(Ordering::Relaxed);
+                        }
+                        Err(_) => { /* 锁竞争：本帧沿用旧缓存，下一帧重试 */ }
+                    }
                 }
 
-                // 执行每帧更新钩子（若已注册）
+                // 执行每帧更新钩子（若已注册），传入当前窗口的可变引用
                 if let Some(ref hook) = hook_cache {
-                    hook.call(exchange_layer.clone());
+                    hook.call(&mut window);
                 }
 
                 // 应用主线程请求的窗口属性

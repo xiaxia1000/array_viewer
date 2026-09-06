@@ -161,8 +161,8 @@ mod test {
             }
 
             // 鼠标位置（窗口坐标系）
-            let mx = exchange.mouse_pos.0.get();
-            let my = exchange.mouse_pos.1.get();
+            let mx = exchange.mouse_pos.0.load(Ordering::Relaxed);
+            let my = exchange.mouse_pos.1.load(Ordering::Relaxed);
             let (x, y) = (mx as usize, my as usize);
 
             // 鼠标在窗口内时处理绘图
