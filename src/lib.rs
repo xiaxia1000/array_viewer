@@ -9,7 +9,7 @@
 //! ```no_run
 //! use array_viewer::init;
 //! let (mut arr, viewer) = init::<800, 600>();
-//! let handle = viewer.run(None);
+//! let handle = viewer.run(None, None);
 //! // 主线程通过 arr.as_mut_slice() 修改像素，通过 viewer.get_exchange_layer() 控制窗口
 //! // ...
 //! handle.join().unwrap();
@@ -45,7 +45,7 @@ use crate::base::ScreenArray;
 /// use array_viewer::init;
 /// let (arr, viewer) = init::<800, 600>();
 /// // 填充像素...
-/// let handle = viewer.run(None);
+/// let handle = viewer.run(None, None);
 /// // ...
 /// ```
 pub fn init<const W: usize, const H: usize>() -> (ScreenArray<W, H>, ArrayViewer<W, H>) {

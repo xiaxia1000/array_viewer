@@ -27,7 +27,7 @@ use std::ptr;
 /// # 示例
 /// ```
 /// use std::thread;
-/// use unsafe_pointer_handler::UnsafePointerHandler;
+/// use array_viewer::unsafe_pointer::UnsafePointerHandler;
 ///
 /// let mut value = 42;
 /// // 从可变指针创建处理器
