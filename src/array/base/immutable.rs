@@ -9,6 +9,7 @@ use image::DynamicImage;
 use image::GenericImageView;
 #[cfg(feature = "array_from_image")]
 use std::path::Path;
+use std::ptr;
 
 /// 一个**只持有指针**的二维屏幕缓冲句柄。
 ///
@@ -109,9 +110,10 @@ impl<T, const W: usize, const H: usize> ScreenArrayBase<T, W, H> {
     /// # Safety
     /// - 只能调用一次。
     /// - 调用后不能再访问任何 `get` / `as_slice` 等方法。
-    pub fn drop(self) {
+    pub fn drop(&mut self) {
         unsafe {
             let _ = Box::from_raw(self.arr_ptr);
+            self.arr_ptr = ptr::null_mut();
         }
     }
 
@@ -366,7 +368,7 @@ mod tests {
 
     #[test]
     fn zero_and_size() {
-        let arr = ScreenArrayBase::<u32, 4, 3>::zero();
+        let mut arr = ScreenArrayBase::<u32, 4, 3>::zero();
         assert_eq!(arr.as_slice(), &[0u32; 12]);
         assert_eq!(ScreenArrayBase::<u32, 4, 3>::size(), (3, 4));
         arr.drop();
@@ -374,7 +376,7 @@ mod tests {
 
     #[test]
     fn new_and_read_write() {
-        let arr = ScreenArrayBase::<u32, 4, 3>::new([[1u32; 4]; 3]);
+        let mut arr = ScreenArrayBase::<u32, 4, 3>::new([[1u32; 4]; 3]);
         assert_eq!(arr.get()[0][0], 1);
         assert_eq!(arr.get()[2][3], 1);
 
@@ -412,11 +414,11 @@ mod tests {
 
     #[test]
     fn generic_custom_type() {
-        let arr = ScreenArrayBase::<CustomPixel, 2, 2>::zero();
+        let mut arr = ScreenArrayBase::<CustomPixel, 2, 2>::zero();
         assert_eq!(arr.as_slice(), &[CustomPixel(0), CustomPixel(0), CustomPixel(0), CustomPixel(0)]);
         arr.drop();
 
-        let arr2 = ScreenArrayBase::<CustomPixel, 2, 2>::new([
+        let mut arr2 = ScreenArrayBase::<CustomPixel, 2, 2>::new([
             [CustomPixel(1), CustomPixel(2)],
             [CustomPixel(3), CustomPixel(4)],
         ]);

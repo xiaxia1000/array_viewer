@@ -124,7 +124,7 @@ mod test {
         const MAX_FRAMES: u32 = 6000;
 
         // 1. 创建像素缓冲区和显示实例
-        let (arr, viewer) = init::<W, H>();
+        let (mut arr, viewer) = init::<W, H>();
         let exchange = viewer.get_exchange_layer();
 
         // 2. 启动显示线程
@@ -237,30 +237,30 @@ mod test {
         exchange.is_running.store(false, Ordering::Relaxed);
         handle.join().unwrap();
         arr.drop();
-    }
 
-    /// 绘制实心圆
-    fn draw_circle(slice: &mut [u32], width: usize, height: usize,
-                   cx: usize, cy: usize, radius: usize, color: u32) {
-        // 计算圆的边界
-        let x_start = if cx > radius { cx - radius } else { 0 };
-        let x_end = (cx + radius + 1).min(width);
-        let y_start = if cy > radius { cy - radius } else { 0 };
-        let y_end = (cy + radius + 1).min(height);
+        /// 绘制实心圆
+        fn draw_circle(slice: &mut [u32], width: usize, height: usize,
+                       cx: usize, cy: usize, radius: usize, color: u32) {
+            // 计算圆的边界
+            let x_start = if cx > radius { cx - radius } else { 0 };
+            let x_end = (cx + radius + 1).min(width);
+            let y_start = if cy > radius { cy - radius } else { 0 };
+            let y_end = (cy + radius + 1).min(height);
 
-        let radius_sq = (radius * radius) as f32;
+            let radius_sq = (radius * radius) as f32;
 
-        for y in y_start..y_end {
-            for x in x_start..x_end {
-                // 计算当前像素到圆心的距离平方
-                let dx = (x as isize - cx as isize) as f32;
-                let dy = (y as isize - cy as isize) as f32;
-                let dist_sq = dx * dx + dy * dy;
+            for y in y_start..y_end {
+                for x in x_start..x_end {
+                    // 计算当前像素到圆心的距离平方
+                    let dx = (x as isize - cx as isize) as f32;
+                    let dy = (y as isize - cy as isize) as f32;
+                    let dist_sq = dx * dx + dy * dy;
 
-                // 如果距离小于等于半径，绘制该像素
-                if dist_sq <= radius_sq {
-                    let idx = y * width + x;
-                    slice[idx] = color;
+                    // 如果距离小于等于半径，绘制该像素
+                    if dist_sq <= radius_sq {
+                        let idx = y * width + x;
+                        slice[idx] = color;
+                    }
                 }
             }
         }

@@ -3,7 +3,6 @@
 use crate::base::{ScreenArray, immutable::ScreenArrayBase};
 use crate::viewer::ArrayViewer;
 use crate::viewer::exchange_layer::ExchangeLayer;
-use std::mem::ManuallyDrop;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -23,8 +22,8 @@ use crate::unsafe_pointer::UnsafePointerHandler;
 /// - 数据缓冲区 `data` 由主线程独占，修改后需调用 `update_display()` 刷新。
 /// - `drop` 时自动停止线程并释放所有堆内存。
 pub struct VisualArray<T: 'static + Zero, const W: usize, const H: usize> {
-    data: ManuallyDrop<ScreenArrayBase<T, W, H>>,
-    display: ManuallyDrop<ScreenArray<W, H>>,
+    data: ScreenArrayBase<T, W, H>,
+    display: ScreenArray<W, H>,
     viewer: ArrayViewer<W, H>,
     handle: Option<JoinHandle<()>>,
 }
@@ -44,7 +43,9 @@ impl<T: 'static + Zero, const W: usize, const H: usize> VisualArray<T, W, H> {
         let display = ScreenArray::zero();
         let viewer = ArrayViewer::new(display.get_ptr() as usize);
 
-        // TODO: 需要更优雅地实现，以下只是临时的。需要分Tile处理再拷贝以防止过多cache miss，需要完善['ArrayViewer']中的闭包调用与替换规则以获得良好的拓展性与约束
+        // TODO: 需要更优雅地实现，以下只是临时的。需要分Tile处理再拷贝以防止过多cache miss，
+        // TODO: 需要完善['ArrayViewer']中的闭包调用与替换规则以获得良好的拓展性与约束，
+        // TODO: 需要把新建结构体和启动渲染分离（显示缓冲区和viewer在调用运行窗口的方法是才创建【懒加载】）
         let data_slice = unsafe {
             UnsafePointerHandler::from_mut_ptr(data.get_ptr())
         };
@@ -62,30 +63,24 @@ impl<T: 'static + Zero, const W: usize, const H: usize> VisualArray<T, W, H> {
             })),
         )); // 使用默认窗口选项
 
-        let this = Self {
-            data: ManuallyDrop::new(data),
-            display: ManuallyDrop::new(display),
-            viewer,
-            handle,
-        };
-        this
+        Self { data, display, viewer, handle, }
     }
 
     /// 获取数据的可变引用（需手动调用 `update_display` 才能刷新）。
     ///
     /// 注意：修改后必须显式调用 `update_display()`，否则显示不变。
     pub fn get_data_mut(&mut self) -> &mut ScreenArrayBase<T, W, H> {
-        &mut *self.data
+        &mut self.data
     }
 
     /// 获取数据的不可变引用。
     pub fn get_data(&self) -> &ScreenArrayBase<T, W, H> {
-        &*self.data
+        &self.data
     }
 
     /// 获取显示缓冲区的不可变引用（只读）。
     pub fn get_display(&self) -> &ScreenArray<W, H> {
-        &*self.display
+        &self.display
     }
 
     /// 停止显示线程（但数据保留）。
@@ -117,11 +112,9 @@ impl<T: 'static + Zero, const W: usize, const H: usize> Drop for VisualArray<T, 
         // 1. 停止渲染线程
         self.stop();
 
-        // 2. 手动释放堆内存（必须在使用 ManuallyDrop 时手动 drop）
-        unsafe {
-            ManuallyDrop::drop(&mut self.display);
-            ManuallyDrop::drop(&mut self.data);
-        }
+        // 2. 手动释放堆内存
+        self.display.drop();
+        self.data.drop();
         // viewer 自动释放，其内部 Arc<ExchangeLayer> 也会随之释放
     }
 }

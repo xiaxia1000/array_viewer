@@ -279,7 +279,7 @@ impl<T: num_traits::Zero + Copy> ScreenArrayBase<T> {
     /// # Safety
     /// - 只能调用一次。
     /// - 调用后不能再访问任何方法。
-    pub fn drop(mut self) {
+    pub fn drop(&mut self) {
         unsafe {
             dealloc_buffer(self.arr_ptr, self.width * self.height);
             self.arr_ptr = ptr::null_mut();
@@ -672,7 +672,7 @@ mod tests {
 
     #[test]
     fn test_new_and_index() {
-        let arr = create_test_array();
+        let mut arr = create_test_array();
         assert_eq!(arr.width(), 3);
         assert_eq!(arr.height(), 2);
 
@@ -689,7 +689,7 @@ mod tests {
 
     #[test]
     fn test_zero_allocation() {
-        let arr = ScreenArrayBase::<u32>::zero(3, 2);
+        let mut arr = ScreenArrayBase::<u32>::zero(3, 2);
         let slice = arr.as_slice();
         assert_eq!(slice, &[0, 0, 0, 0, 0, 0]);
         arr.drop();
@@ -697,7 +697,7 @@ mod tests {
 
     #[test]
     fn test_new_uninit_and_write() {
-        let arr = ScreenArrayBase::<u32>::new_uninit(4, 1);
+        let mut arr = ScreenArrayBase::<u32>::new_uninit(4, 1);
         let slice = arr.as_mut_slice();
         for (i, val) in slice.iter_mut().enumerate() {
             *val = i as u32;
@@ -708,7 +708,7 @@ mod tests {
 
     #[test]
     fn test_get_mut() {
-        let arr = create_test_array();
+        let mut arr = create_test_array();
         {
             let mut view = arr.get_mut();
             view[0][0] = 100;
@@ -721,7 +721,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_view_index_out_of_bounds_panics() {
-        let arr = create_test_array();
+        let mut arr = create_test_array();
         let view = arr.get();
         let _ = view[2][0]; // 行越界
         arr.drop(); // 不会执行到，因为 panic
@@ -730,7 +730,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_view_index_row_overflow_panics() {
-        let arr = ScreenArrayBase::<u32>::zero(usize::MAX, 1); // 分配会失败，这里仅测试索引逻辑，实际不会执行
+        let mut arr = ScreenArrayBase::<u32>::zero(usize::MAX, 1); // 分配会失败，这里仅测试索引逻辑，实际不会执行
         let view = arr.get();
         let _ = view[usize::MAX];
         arr.drop();
@@ -738,7 +738,7 @@ mod tests {
 
     #[test]
     fn test_get_from_index_unsafe() {
-        let arr = create_test_array();
+        let mut arr = create_test_array();
         unsafe {
             assert_eq!(*arr.get_from_index(0, 0), 1);
             assert_eq!(*arr.get_from_index_mut(1, 1), 5);
@@ -813,7 +813,7 @@ mod tests {
 
     #[test]
     fn test_as_slice_empty() {
-        let arr = ScreenArrayBase::<u32>::zero(0, 0);
+        let mut arr = ScreenArrayBase::<u32>::zero(0, 0);
         assert!(arr.as_slice().is_empty());
         arr.drop();
     }
@@ -854,7 +854,7 @@ mod tests {
 
     #[test]
     fn test_generic_custom_type() {
-        let arr = ScreenArrayBase::<CustomPixel>::zero(2, 2);
+        let mut arr = ScreenArrayBase::<CustomPixel>::zero(2, 2);
         assert_eq!(arr.as_slice(), &[CustomPixel(0); 4]);
         arr.drop();
 
@@ -864,7 +864,7 @@ mod tests {
             CustomPixel(3),
             CustomPixel(4),
         ];
-        let arr2 = ScreenArrayBase::<CustomPixel>::new(&data, 2, 2);
+        let mut arr2 = ScreenArrayBase::<CustomPixel>::new(&data, 2, 2);
         let view = arr2.get();
         assert_eq!(view[0][1], CustomPixel(2));
         assert_eq!(view[1][0], CustomPixel(3));
