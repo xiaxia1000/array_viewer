@@ -8,8 +8,7 @@ description = "Lightweight 2D pixel buffer + window viewer. ScreenArray owns hea
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 
-# TODO(发布前填写): 下面的占位信息请替换为真实内容
-authors = ["Your Name <you@example.com>"]
+authors = ["xiaxia1000 <xiayinuo20080923@qq.com>"]
 homepage = "https://example.com/array_viewer"
 repository = "https://example.com/you/array_viewer"
 documentation = "https://docs.rs/array_viewer"
@@ -20,7 +19,6 @@ categories = ["graphics", "visualization"]
 # 打包到 crates.io 时排除 IDE / 本地文件
 exclude = [".idea/", ".gitignore"]
 
-# 如需声明最低 Rust 版本，可取消注释并按实际 MSRV 调整：
 # rust-version = "1.85"
 
 [features]
