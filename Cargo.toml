@@ -3,6 +3,26 @@ name = "array_viewer"
 version = "0.1.0"
 edition = "2024"
 
+# 发布元数据
+description = "Lightweight 2D pixel buffer + window viewer. ScreenArray owns heap pixels (ARGB, W x H at compile time); ArrayViewer renders them zero-copy on a background thread via minifb, with an ExchangeLayer for cross-thread input/window control."
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+
+# TODO(发布前填写): 下面的占位信息请替换为真实内容
+authors = ["Your Name <you@example.com>"]
+homepage = "https://example.com/array_viewer"
+repository = "https://example.com/you/array_viewer"
+documentation = "https://docs.rs/array_viewer"
+
+keywords = ["framebuffer", "pixel", "window", "visualization", "minifb"]
+categories = ["graphics", "visualization"]
+
+# 打包到 crates.io 时排除 IDE / 本地文件
+exclude = [".idea/", ".gitignore"]
+
+# 如需声明最低 Rust 版本，可取消注释并按实际 MSRV 调整：
+# rust-version = "1.85"
+
 [features]
 view_shot = ["image"]
 array_from_image = ["image"]
