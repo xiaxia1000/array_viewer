@@ -2,7 +2,7 @@
 
 pub(crate) mod exchange_layer;
 
-use crate::viewer::exchange_layer::ExchangeLayer;
+use crate::viewer::exchange_layer::{ExchangeLayer, SharedUpdateHook};
 use chrono::Local;
 use minifb::{Window, WindowOptions};
 #[cfg(feature = "view_shot")]
@@ -50,12 +50,19 @@ impl<const W: usize, const H: usize> ArrayViewer<W, H> {
         }
     }
 
-    // TODO: 把update_hook的闭包放到exchang_layer中，由Mutex持有，渲染线程应有一个hook的缓存用于在try_lock失败时复用
     /// 启动显示线程，返回线程句柄。
     ///
     /// 该方法不会消耗 `self`，因此可以在启动后继续调用 `fps()` 或通过 `exchange_layer` 控制。
     ///
-    /// 线程内部逻辑：
+    /// # 更新钩子
+    /// 需要每帧执行的用户逻辑（例如把数据缓冲区转换到显示缓冲区）**不再作为参数传入**，
+    /// 而是在调用本方法前通过 [`ExchangeLayer::set_update_hook`] 注册到交换层：
+    /// - 这样钩子可以在窗口启动前预先注册；
+    /// - 也可以在窗口运行期间被主线程随时替换，无需重启窗口；
+    /// - 渲染线程内部缓存最近一次成功获取的钩子句柄，当读取钩子时发生锁竞争
+    ///   （`try_lock` 失败）会复用该缓存，避免整帧跳过更新。
+    ///
+    /// # 线程内部逻辑
     /// 1. 根据配置创建 [`Window`]。
     /// 2. 设置目标帧率（若有）。
     /// 3. 循环执行 `update_with_buffer` 将像素缓冲区刷新到窗口。
@@ -68,11 +75,10 @@ impl<const W: usize, const H: usize> ArrayViewer<W, H> {
     ///
     /// # 返回值
     /// 线程的 `JoinHandle`，可用于等待线程结束。
-    pub fn run(
-        &self,
-        window_options: Option<WindowOptions>,
-        update_hook: Option<Box<dyn Fn(Arc<ExchangeLayer>) + Send>>) -> JoinHandle<()>
-    {
+    ///
+    /// # 注意
+    /// 同一实例应只调用一次 `run`；重复调用会再开一个显示线程，属于调用者错误。
+    pub fn run(&self, window_options: Option<WindowOptions>) -> JoinHandle<()> {
         let exchange_layer = self.exchange_layer.clone();
         let ptr = self.ptr;
 
@@ -86,7 +92,7 @@ impl<const W: usize, const H: usize> ArrayViewer<W, H> {
             let pixels = unsafe { std::slice::from_raw_parts(ptr, W * H) };
 
             let mut window =
-                Window::new("starting...", W, H, window_options.unwrap_or(WindowOptions::default()))
+                Window::new("starting...", W, H, window_options.unwrap_or_default())
                     .expect("无法创建窗口");
 
             window.set_target_fps(target_fps.load(Ordering::Relaxed));
@@ -104,11 +110,21 @@ impl<const W: usize, const H: usize> ArrayViewer<W, H> {
             // 设置运行标志位
             running.store(true, Ordering::Relaxed);
 
+            // 钩子缓存：最近一次成功获取的共享句柄。
+            // 当 try_lock 失败（主线程正在设置/替换钩子）时沿用该缓存，保证本帧仍执行钩子。
+            let mut hook_cache: Option<SharedUpdateHook> = None;
+
             // 主循环
             while window.is_open() && running.load(Ordering::Relaxed) {
-                // 每帧更新的闭包
-                if let Some(ref uh) = update_hook {
-                    (*uh)(exchange_layer.clone());
+                // 刷新钩子缓存：成功取锁则同步最新钩子；失败则复用旧缓存
+                match exchange_layer.update_hook.try_lock() {
+                    Ok(guard) => hook_cache = guard.as_ref().cloned(),
+                    Err(_) => { /* 锁竞争：沿用上一份缓存 */ }
+                }
+
+                // 执行每帧更新钩子（若已注册）
+                if let Some(ref hook) = hook_cache {
+                    hook.call(exchange_layer.clone());
                 }
 
                 // 应用主线程请求的窗口属性
@@ -137,7 +153,7 @@ impl<const W: usize, const H: usize> ArrayViewer<W, H> {
     /// 该值由显示线程每次刷新后更新，可能略有延迟。
     /// 若线程尚未启动或已结束，返回 0。
     pub fn fps(&self) -> usize  {
-        (&self.exchange_layer.fps).load(Ordering::Relaxed)
+        self.exchange_layer.fps.load(Ordering::Relaxed)
     }
 
     /// 获取 `ExchangeLayer` 的共享引用，用于跨线程控制窗口。

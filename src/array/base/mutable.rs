@@ -351,6 +351,9 @@ impl<T: num_traits::Zero + Copy> ScreenArrayBase<T> {
     }
 
     /// 返回指针的数值形式（仅用于调试/FFI）。
+    ///
+    /// # Safety
+    /// - 需确保跨线程生命周期管理
     pub unsafe fn get_ptr_num(&self) -> usize {
         self.arr_ptr as usize
     }

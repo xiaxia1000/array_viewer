@@ -9,7 +9,7 @@
 //! ```no_run
 //! use array_viewer::init;
 //! let (mut arr, viewer) = init::<800, 600>();
-//! let handle = viewer.run(None, None);
+//! let handle = viewer.run(None);
 //! // 主线程通过 arr.as_mut_slice() 修改像素，通过 viewer.get_exchange_layer() 控制窗口
 //! // ...
 //! handle.join().unwrap();
@@ -45,7 +45,7 @@ use crate::base::ScreenArray;
 /// use array_viewer::init;
 /// let (arr, viewer) = init::<800, 600>();
 /// // 填充像素...
-/// let handle = viewer.run(None, None);
+/// let handle = viewer.run(None);
 /// // ...
 /// ```
 pub fn init<const W: usize, const H: usize>() -> (ScreenArray<W, H>, ArrayViewer<W, H>) {
@@ -78,7 +78,7 @@ mod test {
         let display = ArrayViewer::<WIDTH, HEIGHT>::new(test_data.as_ptr() as usize);
         let exchange_layer = display.get_exchange_layer();
         let running_flag = &exchange_layer.is_running;
-        let handle = display.run(None, None);
+        let handle = display.run(None);
 
         // 噪声参数
         const A: f64 = 0.003;
@@ -128,7 +128,7 @@ mod test {
         let exchange = viewer.get_exchange_layer();
 
         // 2. 启动显示线程
-        let handle = viewer.run(None, None);
+        let handle = viewer.run(None);
 
         // 等待线程真正开始运行
         while !exchange.is_running.load(Ordering::Relaxed) {

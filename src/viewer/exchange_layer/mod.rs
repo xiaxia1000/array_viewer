@@ -6,10 +6,13 @@ use crate::viewer::exchange_layer::mouse_state::{MouseState, MouseStateDirtyMap}
 use crate::viewer::exchange_layer::passed_f32::AtomicF32;
 use minifb::{CursorStyle, MouseButton, MouseMode, Window};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use crate::viewer::exchange_layer::signal::{ApplyFlag, ApplySignal, ApplySignalNonAtomic, UpdateFlag, UpdateSignal, UpdateSignalNonAtomic};
+
+mod hook;
+pub(crate) use hook::SharedUpdateHook;
 
 pub mod key_state;
 pub mod passed_f32;
@@ -62,6 +65,7 @@ pub struct ExchangeLayer {
     pub cursor_style: Mutex<Option<CursorStyle>>,
     /// 鼠标位置（缩放后，与物理像素对应）。
     pub scaled_mouse_pos: (AtomicF32, AtomicF32),
+    // TODO: 把scroll_wheel专门弄一个类型，用于累积滚轮行程，须有与KeyState和MouseState类似的累积取走结构
     /// 滚轮偏移量。
     pub scroll_wheel: (AtomicF32, AtomicF32),
     /// 键盘状态（含边沿检测）。
@@ -71,6 +75,12 @@ pub struct ExchangeLayer {
     /// 运行标志：显示线程检查该标志以决定是否继续循环。
     /// 主线程可将其置为 `false` 以请求退出。
     pub is_running: AtomicBool,
+    /// 更新钩子：显示线程每帧开始执行一次的用户闭包。
+    ///
+    /// 由主线程通过 [`set_update_hook`](Self::set_update_hook) /
+    /// [`clear_update_hook`](Self::clear_update_hook) 整体替换或清除。
+    /// 渲染线程会缓存最近一次成功获取的句柄，以便在 `try_lock` 失败时复用。
+    pub(crate) update_hook: Mutex<Option<SharedUpdateHook>>,
 }
 
 impl ExchangeLayer {
@@ -99,6 +109,7 @@ impl ExchangeLayer {
             key_state: Default::default(),
             is_active: Default::default(),
             is_running: Default::default(),
+            update_hook: Mutex::new(None),
         }
     }
 
@@ -107,6 +118,35 @@ impl ExchangeLayer {
     }
     pub fn get_mouse_state(&self) -> MouseState<'_> {
         MouseState::new(&self.mouse_state)
+    }
+
+    /// 设置显示线程每帧开始执行的更新钩子。
+    ///
+    /// 与早期把钩子作为 `ArrayViewer::run` 参数传递的方式不同，钩子存放在
+    /// 交换层中，可以在显示线程启动前**预先注册**，也可以在运行期间随时
+    /// **替换**，无需重启窗口。
+    ///
+    /// # 参数
+    /// - `hook`: 一段 `Fn(Arc<ExchangeLayer>)` 闭包，收到显示线程当前的
+    ///   交换层引用。通常用于按需刷新/同步数据。
+    ///
+    /// # 线程安全
+    /// 闭包只需满足 `Send`（不必 `Sync`），调用会被内部互斥锁串行化。
+    pub fn set_update_hook(&self, hook: impl Fn(Arc<ExchangeLayer>) + Send + 'static) {
+        let mut guard = self
+            .update_hook
+            .lock()
+            .expect("[ExchangeLayer::set_update_hook] update_hook mutex poisoned");
+        *guard = Some(SharedUpdateHook::new(hook));
+    }
+
+    /// 清除当前更新钩子，渲染线程在后续帧将不再执行任何钩子。
+    pub fn clear_update_hook(&self) {
+        let mut guard = self
+            .update_hook
+            .lock()
+            .expect("[ExchangeLayer::clear_update_hook] update_hook mutex poisoned");
+        *guard = None;
     }
 
 

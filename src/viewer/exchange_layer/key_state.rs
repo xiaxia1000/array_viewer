@@ -4,8 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use minifb::Key;
 
 /// 编译期计算所需的 usize 槽位数，每个位代表一个键。
-const USIZE_COUNT: usize = (Key::Count as usize + usize::BITS as usize - 1) / 
-    (usize::BITS as usize);
+const USIZE_COUNT: usize = (Key::Count as usize).div_ceil(usize::BITS as usize);
 
 /// 线程安全的按键脏位累积器。
 ///
@@ -47,9 +46,8 @@ impl KeyStateDirtyMap {
         }
 
         // 对每个非零掩码的槽位执行原子按位或操作。
-        for slot in 0..USIZE_COUNT {
-            let mask = masks[slot];
-            if mask == 0 {
+        for (slot, mask) in masks.iter().enumerate() {
+            if *mask == 0 {
                 continue;
             }
             let mut old = self.raw[slot].load(Ordering::SeqCst);
@@ -73,9 +71,9 @@ impl KeyStateDirtyMap {
     /// 一个 `[usize; USIZE_COUNT]` 数组，表示自上次取出以来被合并的所有按键位。
     pub(crate) fn take(&self) -> [usize; USIZE_COUNT] {
         let mut result = [0usize; USIZE_COUNT];
-        for slot in 0..USIZE_COUNT {
+        for (slot, r) in result.iter_mut().enumerate() {
             // swap(0) 等价于读取旧值并写入 0，是原子的。
-            result[slot] = self.raw[slot].swap(0, Ordering::SeqCst);
+            *r = self.raw[slot].swap(0, Ordering::SeqCst);
         }
         result
     }
