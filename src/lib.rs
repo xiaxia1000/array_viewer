@@ -16,15 +16,15 @@
 //! arr.drop();  // 手动释放内存
 //! ```
 
-mod viewer;
 mod array;
+mod viewer;
 mod visual;
 
-pub use minifb::Key;
+use crate::base::ScreenArray;
 pub use array::*;
+pub use minifb::Key;
 pub use viewer::*;
 pub use visual::*;
-use crate::base::ScreenArray;
 
 /// 创建一个新的屏幕缓冲区和对应的显示实例，并返回它们的元组。
 ///
@@ -53,8 +53,6 @@ pub fn init<const W: usize, const H: usize>() -> (ScreenArray<W, H>, ArrayViewer
     let view = ArrayViewer::new(arr.get_ptr() as usize);
     (arr, view)
 }
-
-
 
 #[cfg(test)]
 mod test {
@@ -91,19 +89,16 @@ mod test {
             frame += 1;
             let t = frame as f64 * A * 10.0;
 
-            test_data
-                .iter_mut()
-                .enumerate()
-                .for_each(|(idx, color)| {
-                    let w = (idx % WIDTH) as f64 * A;
-                    let h = (idx / WIDTH) as f64 * A;
+            test_data.iter_mut().enumerate().for_each(|(idx, color)| {
+                let w = (idx % WIDTH) as f64 * A;
+                let h = (idx / WIDTH) as f64 * A;
 
-                    let r = ((noise.get([h, w, t]) + 1.0) * 127.5) as u32;
-                    let g = ((noise.get([h + 10.0, w + 10.0, t + 10.0]) + 1.0) * 127.5) as u32;
-                    let b = ((noise.get([h + 20.0, w + 20.0, t + 20.0]) + 1.0) * 127.5) as u32;
+                let r = ((noise.get([h, w, t]) + 1.0) * 127.5) as u32;
+                let g = ((noise.get([h + 10.0, w + 10.0, t + 10.0]) + 1.0) * 127.5) as u32;
+                let b = ((noise.get([h + 20.0, w + 20.0, t + 20.0]) + 1.0) * 127.5) as u32;
 
-                    *color = (0xFF << 24) | (r << 16) | (g << 8) | b;
-                });
+                *color = (0xFF << 24) | (r << 16) | (g << 8) | b;
+            });
         }
 
         // 请求退出并等待显示线程结束
@@ -200,10 +195,12 @@ mod test {
             }
 
             // +/- 调整画笔大小
-            if key_state.is_down(Key::Equal) {  // + 键
+            if key_state.is_down(Key::Equal) {
+                // + 键
                 brush_radius = (brush_radius + 2).min(50);
             }
-            if key_state.is_down(Key::Minus) {  // - 键
+            if key_state.is_down(Key::Minus) {
+                // - 键
                 brush_radius = (brush_radius - 2).max(2);
             }
 
@@ -227,8 +224,6 @@ mod test {
                 *lock = Some(title);
             }
 
-
-
             // 控制循环速度，避免 CPU 满载
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -239,8 +234,15 @@ mod test {
         arr.drop();
 
         /// 绘制实心圆
-        fn draw_circle(slice: &mut [u32], width: usize, height: usize,
-                       cx: usize, cy: usize, radius: usize, color: u32) {
+        fn draw_circle(
+            slice: &mut [u32],
+            width: usize,
+            height: usize,
+            cx: usize,
+            cy: usize,
+            radius: usize,
+            color: u32,
+        ) {
             // 计算圆的边界
             let x_start = if cx > radius { cx - radius } else { 0 };
             let x_end = (cx + radius + 1).min(width);

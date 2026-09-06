@@ -16,13 +16,13 @@
 //! 当 `T: Send + Sync` 时，该类型实现了 `Send` 和 `Sync`，但并发访问内容需要外部同步。
 
 #[cfg(feature = "array_from_image")]
+use crate::base::immutable::try_from_image_inner;
+#[cfg(feature = "array_from_image")]
 use image::GenericImageView;
+use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 #[cfg(feature = "array_from_image")]
 use std::path::Path;
-use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
 use std::ptr;
-#[cfg(feature = "array_from_image")]
-use crate::base::immutable::try_from_image_inner;
 
 /// 动态尺寸的二维像素缓冲区句柄，内存位于堆上且地址固定。
 #[derive(Debug)]
@@ -266,7 +266,10 @@ impl<T: num_traits::Zero + Copy> ScreenArrayBase<T> {
     /// - 调用者必须确保不会发生 double-free
     /// - 指针不能为 null
     pub unsafe fn from_raw(arr_ptr: *mut T, width: usize, height: usize) -> Self {
-        assert!(!arr_ptr.is_null(), "[ScreenArrayBase<T>::from_raw] null pointer");
+        assert!(
+            !arr_ptr.is_null(),
+            "[ScreenArrayBase<T>::from_raw] null pointer"
+        );
         Self {
             arr_ptr,
             width,
@@ -455,43 +458,37 @@ impl<T: num_traits::Zero + Copy> ScreenArrayBase<T> {
             ResizeInit::Uninit => {
                 // 无需任何操作
             }
-            ResizeInit::Zero => {
-                unsafe { Self::zero_buf(new_ptr, new_len); }
-            }
-            ResizeInit::LinearCopy => {
-                unsafe { Self::copy_linear(old_ptr, new_ptr, old_len.min(new_len)); }
-            }
-            ResizeInit::AlignCopy => {
-                unsafe {
-                    Self::copy_align(
-                        old_ptr,
-                        new_ptr,
-                        self.width,
-                        new_width,
-                        self.height,
-                        new_height,
-                    );
-                }
-            }
-            ResizeInit::ZeroLinearCopy => {
-                unsafe {
-                    Self::zero_buf(new_ptr, new_len);
-                    Self::copy_linear(old_ptr, new_ptr, old_len.min(new_len));
-                }
-            }
-            ResizeInit::ZeroAlignCopy => {
-                unsafe {
-                    Self::zero_buf(new_ptr, new_len);
-                    Self::copy_align(
-                        old_ptr,
-                        new_ptr,
-                        self.width,
-                        new_width,
-                        self.height,
-                        new_height,
-                    );
-                }
-            }
+            ResizeInit::Zero => unsafe {
+                Self::zero_buf(new_ptr, new_len);
+            },
+            ResizeInit::LinearCopy => unsafe {
+                Self::copy_linear(old_ptr, new_ptr, old_len.min(new_len));
+            },
+            ResizeInit::AlignCopy => unsafe {
+                Self::copy_align(
+                    old_ptr,
+                    new_ptr,
+                    self.width,
+                    new_width,
+                    self.height,
+                    new_height,
+                );
+            },
+            ResizeInit::ZeroLinearCopy => unsafe {
+                Self::zero_buf(new_ptr, new_len);
+                Self::copy_linear(old_ptr, new_ptr, old_len.min(new_len));
+            },
+            ResizeInit::ZeroAlignCopy => unsafe {
+                Self::zero_buf(new_ptr, new_len);
+                Self::copy_align(
+                    old_ptr,
+                    new_ptr,
+                    self.width,
+                    new_width,
+                    self.height,
+                    new_height,
+                );
+            },
         }
 
         // 更新自身状态
@@ -507,14 +504,18 @@ impl<T: num_traits::Zero + Copy> ScreenArrayBase<T> {
     #[inline]
     unsafe fn zero_buf(ptr: *mut T, len: usize) {
         for i in 0..len {
-            unsafe { ptr::write(ptr.add(i), T::zero()); }
+            unsafe {
+                ptr::write(ptr.add(i), T::zero());
+            }
         }
     }
 
     #[inline]
     unsafe fn copy_linear(src: *mut T, dst: *mut T, len: usize) {
         if len > 0 {
-            unsafe { ptr::copy_nonoverlapping(src, dst, len); }
+            unsafe {
+                ptr::copy_nonoverlapping(src, dst, len);
+            }
         }
     }
 
@@ -664,8 +665,8 @@ unsafe impl<T: num_traits::Zero + Copy + Sync> Sync for ScreenArrayBase<T> {}
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Add;
     use super::*;
+    use std::ops::Add;
 
     // 辅助函数：创建一个已初始化的 ScreenArrayBase<u32>
     fn create_test_array() -> ScreenArrayBase<u32> {
@@ -844,7 +845,6 @@ mod tests {
             CustomPixel(self.0 + rhs.0)
         }
     }
-
 
     impl num_traits::Zero for CustomPixel {
         fn zero() -> Self {

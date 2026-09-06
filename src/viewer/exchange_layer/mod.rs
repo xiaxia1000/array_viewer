@@ -1,22 +1,25 @@
 //! 定义主线程与显示线程之间的数据交换层。
 
-pub(crate) use crate::viewer::exchange_layer::hook::{box_hook, UpdateHook};
-use crate::viewer::exchange_layer::key_state::{KeyState, KeyStateDirtyMap};
-use crate::viewer::exchange_layer::mouse_state::{MouseState, MouseStateDirtyMap};
-use crate::viewer::exchange_layer::signal::{ApplyFlag, ApplySignal, ApplySignalNonAtomic, UpdateFlag, UpdateSignal, UpdateSignalNonAtomic};
+pub(crate) use crate::viewer::exchange_layer::hook::{UpdateHook, box_hook};
+use atomic_float::AtomicF32;
+use key_state::{KeyState, KeyStateDirtyMap};
 use minifb::{CursorStyle, MouseButton, MouseMode, Window};
+use mouse_state::{MouseState, MouseStateDirtyMap};
+use scroll_wheel::{ScrollWheel, ScrollWheelAccumulator};
+use signal::{
+    ApplyFlag, ApplySignal, ApplySignalNonAtomic, UpdateFlag, UpdateSignal, UpdateSignalNonAtomic,
+};
 use std::any::type_name;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
-use atomic_float::AtomicF32;
 
-pub mod key_state;
-pub mod passed_f32;
-pub mod mouse_state;
-pub mod signal;
 mod hook;
+pub mod key_state;
+pub mod mouse_state;
+mod scroll_wheel;
+pub mod signal;
 
 /// 用于在主线程和显示线程之间交换状态的结构体。
 ///
@@ -63,9 +66,10 @@ pub struct ExchangeLayer {
     pub cursor_style: Mutex<Option<CursorStyle>>,
     /// 鼠标位置（缩放后，与物理像素对应）。
     pub scaled_mouse_pos: (AtomicF32, AtomicF32),
-    // TODO: 把scroll_wheel专门弄一个类型，用于累积滚轮行程，须有与KeyState和MouseState类似的累积取走结构
-    /// 滚轮偏移量。
-    pub scroll_wheel: (AtomicF32, AtomicF32),
+    /// 滚轮行程累积器：显示线程逐帧把窗口读到的滚轮增量
+    /// [merge](ScrollWheelAccumulator::merge) 进来，主线程通过
+    /// [`get_scroll_wheel`](Self::get_scroll_wheel) 按帧取走累计行程。
+    scroll_wheel: ScrollWheelAccumulator,
     /// 键盘状态（含边沿检测）。
     key_state: KeyStateDirtyMap,
     /// 窗口是否处于激活状态（由显示线程更新）。
@@ -101,13 +105,13 @@ impl ExchangeLayer {
             topmost: Default::default(),
             background_color: Default::default(),
             cursor_visibility: AtomicBool::new(true),
-            target_fps: AtomicUsize::new(60),                           // 0 为无限制
+            target_fps: AtomicUsize::new(60), // 0 为无限制
             fps: Default::default(),
             mouse_pos: (Default::default(), Default::default()),
             mouse_state: Default::default(),
             cursor_style: Mutex::new(None),
             scaled_mouse_pos: (Default::default(), Default::default()),
-            scroll_wheel: (Default::default(), Default::default()),
+            scroll_wheel: ScrollWheelAccumulator::new(),
             key_state: Default::default(),
             is_active: Default::default(),
             is_running: Default::default(),
@@ -121,6 +125,15 @@ impl ExchangeLayer {
     }
     pub fn get_mouse_state(&self) -> MouseState<'_> {
         MouseState::new(&self.mouse_state)
+    }
+
+    /// 获取滚轮行程的帧视图。
+    ///
+    /// 用法与 [`get_key_state`](Self::get_key_state) 一致：主线程每帧先调用
+    /// [`update`](ScrollWheel::update) 取走自上次取走以来累计的总行程，再通过
+    /// `x()` / `y()` 查询本周期内的水平 / 垂直滚动量。
+    pub fn get_scroll_wheel(&self) -> ScrollWheel<'_> {
+        ScrollWheel::new(&self.scroll_wheel)
     }
 
     /// 设置显示线程每帧开始执行的更新钩子。
@@ -161,7 +174,6 @@ impl ExchangeLayer {
         self.hook_epoch.fetch_add(1, Ordering::Relaxed);
     }
 
-
     // ---------- 公共入口 ----------
     /// 从窗口读取当前状态，更新交换层的输入相关字段。
     ///
@@ -171,15 +183,32 @@ impl ExchangeLayer {
     /// # 参数
     /// - `window`：可变引用到 minifb 窗口。
     pub(crate) fn update_from_window(&self, window: &mut Window) {
-        let update_signal: UpdateSignalNonAtomic = self.update_signal.bits.load(Ordering::Relaxed).into();
-        if update_signal.get(UpdateFlag::WindowSize)        { self.update_window_size(window);      }
-        if update_signal.get(UpdateFlag::WindowPosition)    { self.update_window_position(window);  }
-        if update_signal.get(UpdateFlag::MousePos)          { self.update_mouse_pos(window);        }
-        if update_signal.get(UpdateFlag::ScaledMousePos)    { self.update_scaled_mouse_pos(window); }
-        if update_signal.get(UpdateFlag::MouseState)        { self.update_mouse_state(window);      }
-        if update_signal.get(UpdateFlag::ScrollWheel)       { self.update_scroll_wheel(window);     }
-        if update_signal.get(UpdateFlag::KeyState)          { self.update_key_state(window);        }
-        if update_signal.get(UpdateFlag::IsActive)          { self.update_is_active(window);        }
+        let update_signal: UpdateSignalNonAtomic =
+            self.update_signal.bits.load(Ordering::Relaxed).into();
+        if update_signal.get(UpdateFlag::WindowSize) {
+            self.update_window_size(window);
+        }
+        if update_signal.get(UpdateFlag::WindowPosition) {
+            self.update_window_position(window);
+        }
+        if update_signal.get(UpdateFlag::MousePos) {
+            self.update_mouse_pos(window);
+        }
+        if update_signal.get(UpdateFlag::ScaledMousePos) {
+            self.update_scaled_mouse_pos(window);
+        }
+        if update_signal.get(UpdateFlag::MouseState) {
+            self.update_mouse_state(window);
+        }
+        if update_signal.get(UpdateFlag::ScrollWheel) {
+            self.update_scroll_wheel(window);
+        }
+        if update_signal.get(UpdateFlag::KeyState) {
+            self.update_key_state(window);
+        }
+        if update_signal.get(UpdateFlag::IsActive) {
+            self.update_is_active(window);
+        }
     }
 
     /// 将交换层中的配置数据应用到窗口。
@@ -190,15 +219,28 @@ impl ExchangeLayer {
     /// # 参数
     /// - `window`：可变引用到 minifb 窗口。
     pub(crate) fn apply_to_window(&self, window: &mut Window) {
-        let apply_signal: ApplySignalNonAtomic = self.apply_signal.bits.load(Ordering::Relaxed).into();
-        if apply_signal.get(ApplyFlag::WindowPosition)      { self.apply_window_position(window);   }
+        let apply_signal: ApplySignalNonAtomic =
+            self.apply_signal.bits.load(Ordering::Relaxed).into();
+        if apply_signal.get(ApplyFlag::WindowPosition) {
+            self.apply_window_position(window);
+        }
         // if apply_signal.get(ApplyFlag::Title)               { self.apply_title(window);             }
         self.apply_title(window);
-        if apply_signal.get(ApplyFlag::Topmost)             { self.apply_topmost(window);           }
-        if apply_signal.get(ApplyFlag::BackgroundColor)     { self.apply_background_color(window);  }
-        if apply_signal.get(ApplyFlag::CursorVisibility)    { self.apply_cursor_visibility(window); }
-        if apply_signal.get(ApplyFlag::TargetFps)           { self.apply_target_fps(window);        }
-        if apply_signal.get(ApplyFlag::CursorStyle)         { self.apply_cursor_style(window);      }
+        if apply_signal.get(ApplyFlag::Topmost) {
+            self.apply_topmost(window);
+        }
+        if apply_signal.get(ApplyFlag::BackgroundColor) {
+            self.apply_background_color(window);
+        }
+        if apply_signal.get(ApplyFlag::CursorVisibility) {
+            self.apply_cursor_visibility(window);
+        }
+        if apply_signal.get(ApplyFlag::TargetFps) {
+            self.apply_target_fps(window);
+        }
+        if apply_signal.get(ApplyFlag::CursorStyle) {
+            self.apply_cursor_style(window);
+        }
         self.apply_signal.reset();
     }
 
@@ -241,8 +283,8 @@ impl ExchangeLayer {
 
     pub(crate) fn update_scroll_wheel(&self, window: &Window) {
         if let Some((x, y)) = window.get_scroll_wheel() {
-            self.scroll_wheel.0.store(x, Ordering::Relaxed);
-            self.scroll_wheel.1.store(y, Ordering::Relaxed);
+            // 累加本帧的滚轮增量（原子操作）；主线程按需取走，避免在两次读取间丢失行程。
+            self.scroll_wheel.merge(x, y);
         }
     }
 
@@ -267,9 +309,9 @@ impl ExchangeLayer {
         self.apply_option_field(&self.title, |opt| {
             if let Some(title) = opt {
                 window.set_title(title);
-            } else { window.set_title(
-                &format!("fps: {}", self.fps.load(Ordering::Relaxed))
-            ); }
+            } else {
+                window.set_title(&format!("fps: {}", self.fps.load(Ordering::Relaxed)));
+            }
         });
     }
 
@@ -317,9 +359,9 @@ impl ExchangeLayer {
                 eprintln!(
                     "[warning] The mutex lock of type:{} object in thread:{} is over delay",
                     type_name::<T>(),
-                    thread::current().name().unwrap_or(
-                        &*format!("id:{:?}", thread::current().id())
-                    )
+                    thread::current()
+                        .name()
+                        .unwrap_or(&*format!("id:{:?}", thread::current().id()))
                 );
                 break;
             }

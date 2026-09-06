@@ -131,7 +131,6 @@ impl<T: ?Sized> UnsafePointerHandler<T> {
     pub unsafe fn into_ptr(self) -> *const T {
         self.0 as *const T
     }
-
 }
 
 impl<T> UnsafePointerHandler<T> {

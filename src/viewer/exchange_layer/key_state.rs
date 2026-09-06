@@ -1,7 +1,7 @@
 //! 键盘状态跟踪，支持边沿检测（按下/释放）和线程安全。
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use minifb::Key;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// 编译期计算所需的 usize 槽位数，每个位代表一个键。
 const USIZE_COUNT: usize = (Key::Count as usize).div_ceil(usize::BITS as usize);
@@ -279,7 +279,16 @@ mod tests {
         use std::sync::Arc;
 
         let map = Arc::new(KeyStateDirtyMap::new());
-        let keys = [Key::A, Key::B, Key::C, Key::D, Key::E, Key::F, Key::G, Key::H];
+        let keys = [
+            Key::A,
+            Key::B,
+            Key::C,
+            Key::D,
+            Key::E,
+            Key::F,
+            Key::G,
+            Key::H,
+        ];
         let handles: Vec<_> = keys
             .iter()
             .map(|&k| {
@@ -380,6 +389,9 @@ mod tests {
         assert!(!state.is_pressed(Key::Space));
         assert!(!state.is_down(Key::Space));
         assert!(!state.is_up(Key::Space));
-        assert_eq!(state.snapshot(), ([0usize; USIZE_COUNT], [0usize; USIZE_COUNT]));
+        assert_eq!(
+            state.snapshot(),
+            ([0usize; USIZE_COUNT], [0usize; USIZE_COUNT])
+        );
     }
 }

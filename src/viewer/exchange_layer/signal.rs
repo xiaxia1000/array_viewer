@@ -1,8 +1,8 @@
 //! 定义用于控制更新和应用的信号标志。
 
 use std::ops::{BitOr, Deref};
-use std::sync::atomic::{AtomicU16, AtomicU8};
 use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU8, AtomicU16};
 
 // ============================================================
 // UpdateSignal
@@ -12,14 +12,14 @@ use std::sync::atomic::Ordering;
 #[derive(Copy, Clone, Debug)]
 #[repr(u8)]
 pub enum UpdateFlag {
-    WindowSize      = 1 << 0,
-    WindowPosition  = 1 << 1,
-    MousePos        = 1 << 2,
-    MouseState      = 1 << 3,
-    ScaledMousePos  = 1 << 4,
-    ScrollWheel     = 1 << 5,
-    KeyState        = 1 << 6,
-    IsActive        = 1 << 7,
+    WindowSize = 1 << 0,
+    WindowPosition = 1 << 1,
+    MousePos = 1 << 2,
+    MouseState = 1 << 3,
+    ScaledMousePos = 1 << 4,
+    ScrollWheel = 1 << 5,
+    KeyState = 1 << 6,
+    IsActive = 1 << 7,
 }
 
 /// 更新标志的组合类型，使用 `u8` 位图，便于批量操作。
@@ -28,14 +28,14 @@ pub struct UpdateFlags(pub u8);
 
 impl UpdateFlags {
     // 预定义常量，每个标志占一位
-    pub const WINDOW_SIZE: Self      = Self(1 << 0);
-    pub const WINDOW_POSITION: Self  = Self(1 << 1);
-    pub const MOUSE_POS: Self        = Self(1 << 2);
-    pub const MOUSE_STATE: Self      = Self(1 << 3);
+    pub const WINDOW_SIZE: Self = Self(1 << 0);
+    pub const WINDOW_POSITION: Self = Self(1 << 1);
+    pub const MOUSE_POS: Self = Self(1 << 2);
+    pub const MOUSE_STATE: Self = Self(1 << 3);
     pub const SCALED_MOUSE_POS: Self = Self(1 << 4);
-    pub const SCROLL_WHEEL: Self     = Self(1 << 5);
-    pub const KEY_STATE: Self        = Self(1 << 6);
-    pub const IS_ACTIVE: Self        = Self(1 << 7);
+    pub const SCROLL_WHEEL: Self = Self(1 << 5);
+    pub const KEY_STATE: Self = Self(1 << 6);
+    pub const IS_ACTIVE: Self = Self(1 << 7);
 }
 
 // UpdateFlag 与 UpdateFlag 组合成 UpdateFlags
@@ -79,7 +79,9 @@ impl From<UpdateFlag> for UpdateFlags {
 
 impl Deref for UpdateFlags {
     type Target = u8;
-    fn deref(&self) -> &Self::Target { &self.0 }
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 /// 原子更新信号，用于指示显示线程需要从窗口读取哪些字段。
@@ -97,7 +99,9 @@ pub struct UpdateSignal {
 impl UpdateSignal {
     /// 创建一个新的信号，所有位默认为 1（更新全部字段）。
     pub fn new() -> Self {
-        Self { bits: AtomicU8::new(u8::MAX) }
+        Self {
+            bits: AtomicU8::new(u8::MAX),
+        }
     }
 
     /// 批量设置指定标志位（置 1）。
@@ -112,7 +116,9 @@ impl UpdateSignal {
     }
 
     /// 重置所有标志位为 0。
-    pub fn reset(&self) { self.bits.store(0, Ordering::SeqCst) }
+    pub fn reset(&self) {
+        self.bits.store(0, Ordering::SeqCst)
+    }
 
     /// 批量翻转指定标志位。
     pub fn toggle(&self, flags: impl Into<UpdateFlags>) {
@@ -159,14 +165,14 @@ pub struct ApplyFlags(pub u16);
 
 impl ApplyFlags {
     pub const WINDOW_POSITION: Self = Self(1 << 0);
-    pub const TITLE: Self           = Self(1 << 1);
-    pub const ICON: Self            = Self(1 << 2);
-    pub const TOPMOST: Self         = Self(1 << 3);
-    pub const BACKGROUND_COLOR: Self= Self(1 << 4);
-    pub const CURSOR_VISIBILITY: Self= Self(1 << 5);
-    pub const TARGET_FPS: Self      = Self(1 << 6);
-    pub const CURSOR_STYLE: Self    = Self(1 << 7);
-    pub const IS_RUNNING: Self      = Self(1 << 8);
+    pub const TITLE: Self = Self(1 << 1);
+    pub const ICON: Self = Self(1 << 2);
+    pub const TOPMOST: Self = Self(1 << 3);
+    pub const BACKGROUND_COLOR: Self = Self(1 << 4);
+    pub const CURSOR_VISIBILITY: Self = Self(1 << 5);
+    pub const TARGET_FPS: Self = Self(1 << 6);
+    pub const CURSOR_STYLE: Self = Self(1 << 7);
+    pub const IS_RUNNING: Self = Self(1 << 8);
 }
 
 // ApplyFlag 与 ApplyFlag 组合成 ApplyFlags
@@ -208,7 +214,9 @@ impl From<ApplyFlag> for ApplyFlags {
 
 impl Deref for ApplyFlags {
     type Target = u16;
-    fn deref(&self) -> &Self::Target { &self.0 }
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 /// 原子应用信号，用于指示显示线程需要应用哪些窗口配置。
@@ -222,7 +230,9 @@ pub struct ApplySignal {
 impl ApplySignal {
     /// 创建一个新的信号，默认所有位为 0。
     pub fn new() -> Self {
-        Self { bits: AtomicU16::new(0) }
+        Self {
+            bits: AtomicU16::new(0),
+        }
     }
 
     /// 批量设置指定标志位。
@@ -237,7 +247,9 @@ impl ApplySignal {
     }
 
     /// 重置所有标志位为 0。
-    pub fn reset(&self) { self.bits.store(0, Ordering::SeqCst) }
+    pub fn reset(&self) {
+        self.bits.store(0, Ordering::SeqCst)
+    }
 
     /// 批量翻转指定标志位。
     pub fn toggle(&self, flags: impl Into<ApplyFlags>) {

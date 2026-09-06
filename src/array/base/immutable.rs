@@ -51,7 +51,9 @@ pub struct ScreenArrayBase<T, const W: usize, const H: usize> {
 // 主要实现块：不要求 `T` 实现特殊 trait（仅需 `Sized`）
 impl<T, const W: usize, const H: usize> ScreenArrayBase<T, W, H> {
     const _CHECK: () = {
-        let _ = W.checked_mul(H).expect("[ScreenArrayBase<T,W,H>] W * H overflows usize");
+        let _ = W
+            .checked_mul(H)
+            .expect("[ScreenArrayBase<T,W,H>] W * H overflows usize");
     };
 
     /// 从栈上的二维数组构造一个固定地址的堆缓冲。
@@ -329,7 +331,9 @@ impl<T, const W: usize, const H: usize> ScreenArrayBase<T, W, H> {
 
 // 可选的 `TryFrom<DynamicImage>` 实现：要求 `T: From<u32>` 作为便捷方式
 #[cfg(feature = "array_from_image")]
-impl<T: From<u32>, const W: usize, const H: usize> TryFrom<DynamicImage> for ScreenArrayBase<T, W, H> {
+impl<T: From<u32>, const W: usize, const H: usize> TryFrom<DynamicImage>
+    for ScreenArrayBase<T, W, H>
+{
     type Error = Box<dyn std::error::Error>;
 
     fn try_from(value: DynamicImage) -> Result<Self, Self::Error> {
@@ -351,8 +355,7 @@ impl<T: From<u32>, const W: usize, const H: usize> TryFrom<DynamicImage> for Scr
 #[cfg(feature = "array_from_image")]
 pub(super) fn try_from_image_inner<T: From<u32>>(raw: Vec<u8>) -> Vec<T> {
     // 将每个像素打包为 u32 并通过 `T::from` 转换
-    raw
-        .chunks_exact(4)
+    raw.chunks_exact(4)
         .map(|chunk| {
             let r = chunk[0] as u32;
             let g = chunk[1] as u32;
@@ -366,8 +369,8 @@ pub(super) fn try_from_image_inner<T: From<u32>>(raw: Vec<u8>) -> Vec<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Add;
     use super::*;
+    use std::ops::Add;
 
     #[test]
     fn zero_and_size() {
@@ -418,7 +421,15 @@ mod tests {
     #[test]
     fn generic_custom_type() {
         let mut arr = ScreenArrayBase::<CustomPixel, 2, 2>::zero();
-        assert_eq!(arr.as_slice(), &[CustomPixel(0), CustomPixel(0), CustomPixel(0), CustomPixel(0)]);
+        assert_eq!(
+            arr.as_slice(),
+            &[
+                CustomPixel(0),
+                CustomPixel(0),
+                CustomPixel(0),
+                CustomPixel(0)
+            ]
+        );
         arr.drop();
 
         let mut arr2 = ScreenArrayBase::<CustomPixel, 2, 2>::new([

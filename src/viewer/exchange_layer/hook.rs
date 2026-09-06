@@ -1,5 +1,5 @@
-use std::fmt;
 use minifb::Window;
+use std::fmt;
 
 /// 更新钩子：接收窗口可变引用的用户闭包句柄。
 ///

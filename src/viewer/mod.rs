@@ -7,8 +7,8 @@ use chrono::Local;
 use minifb::{Window, WindowOptions};
 #[cfg(feature = "view_shot")]
 use std::path::Path;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::thread;
 use std::thread::JoinHandle;
 
@@ -94,9 +94,8 @@ impl<const W: usize, const H: usize> ArrayViewer<W, H> {
             // 从原始指针构造切片（只读，零拷贝）
             let pixels = unsafe { std::slice::from_raw_parts(ptr, W * H) };
 
-            let mut window =
-                Window::new("starting...", W, H, window_options.unwrap_or_default())
-                    .expect("无法创建窗口");
+            let mut window = Window::new("starting...", W, H, window_options.unwrap_or_default())
+                .expect("无法创建窗口");
 
             window.set_target_fps(target_fps.load(Ordering::Relaxed));
 
@@ -164,12 +163,14 @@ impl<const W: usize, const H: usize> ArrayViewer<W, H> {
     ///
     /// 该值由显示线程每次刷新后更新，可能略有延迟。
     /// 若线程尚未启动或已结束，返回 0。
-    pub fn fps(&self) -> usize  {
+    pub fn fps(&self) -> usize {
         self.exchange_layer.fps.load(Ordering::Relaxed)
     }
 
     /// 获取 `ExchangeLayer` 的共享引用，用于跨线程控制窗口。
-    pub fn get_exchange_layer(&self) -> Arc<ExchangeLayer> { self.exchange_layer.clone() }
+    pub fn get_exchange_layer(&self) -> Arc<ExchangeLayer> {
+        self.exchange_layer.clone()
+    }
 
     #[cfg(feature = "view_shot")]
     /// 将当前像素缓冲区保存为图片文件（例如 PNG、JPEG 等）。

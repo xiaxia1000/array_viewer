@@ -1,12 +1,12 @@
 //! 可视化二维数组包装，集成数据缓冲区、显示缓冲区和渲染线程。
 
 use crate::base::{ScreenArray, immutable::ScreenArrayBase};
+use crate::unsafe_pointer::UnsafePointerHandler;
 use crate::viewer::ArrayViewer;
 use crate::viewer::exchange_layer::ExchangeLayer;
-use crate::unsafe_pointer::UnsafePointerHandler;
 use num_traits::Zero;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::thread::JoinHandle;
 
 /// 可视化的二维数组，用于展示类型 `T` 的元素。
@@ -153,10 +153,7 @@ impl<T: 'static + Zero, const W: usize, const H: usize> VisualArray<T, W, H> {
     ///
     /// 若尚未调用 [`run`](Self::run) 或线程已结束，返回 0。
     pub fn fps(&self) -> usize {
-        self.viewer
-            .as_ref()
-            .map(|v| v.fps())
-            .unwrap_or(0)
+        self.viewer.as_ref().map(|v| v.fps()).unwrap_or(0)
     }
 
     /// 获取交换层（`ExchangeLayer`）的共享引用，用于控制窗口属性、读取输入等。
@@ -213,11 +210,7 @@ mod tests {
         const H: usize = 3;
 
         // 源数据：3 行 × 4 列，值 = 1..=12（行优先）
-        let data = [
-            [1u32, 2, 3, 4],
-            [5, 6, 7, 8],
-            [9, 10, 11, 12],
-        ];
+        let data = [[1u32, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]];
         let mut display = [[0u32; W]; H];
 
         convert_to_display(&data, &mut display, &*gray());
