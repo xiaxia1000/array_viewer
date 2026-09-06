@@ -9,8 +9,8 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 authors = ["xiaxia1000 <xiayinuo20080923@qq.com>"]
-homepage = "https://example.com/array_viewer"
-repository = "https://example.com/you/array_viewer"
+homepage = "https://github.com/xiaxia1000/array_viewer"
+repository = "https://github.com/xiaxia1000/array_viewer"
 documentation = "https://docs.rs/array_viewer"
 
 keywords = ["framebuffer", "pixel", "window", "visualization", "minifb"]
