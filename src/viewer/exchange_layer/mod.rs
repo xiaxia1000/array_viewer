@@ -21,6 +21,175 @@ pub mod mouse_state;
 mod scroll_wheel;
 pub mod signal;
 
+
+// =================================================================================================
+// 用于生成get/set方法的宏
+// =================================================================================================
+/// 生成获取字段引用的get方法
+macro_rules! get_methods_ref {
+    ($method_name: ident, $field_name: ident, $type: ty) => {
+        #[doc = concat!("获取", stringify!($field_name), "的不可变引用，输出为&", stringify!($type))]
+        pub fn $method_name(&self) -> &$type {
+            &self.$field_name
+        }
+    };
+}
+/// 生成get方法（单原子）
+macro_rules! get_methods_single_atomic {
+    ($method_name: ident, $field_name: ident, $output: ty) => {
+        #[doc = concat!(" 原子地获取 ",
+            stringify!($field_name),
+            "，使用Ordering::Relaxed ，输出 ",
+            stringify!($output)
+        )]
+        #[inline]
+        pub fn $method_name(&self) -> $output {
+            self.$field_name.load(Ordering::Relaxed)
+        }
+    };
+}
+#[allow(unused)]
+/// 生成get方法（单互斥锁，阻塞）
+macro_rules! get_methods_single_mutex {
+    ($method_name: ident, $field_name: ident, $output: ty) => {
+        #[doc = concat!(" 通过锁获取 ",
+            stringify!($field_name),
+            "，输出 LockResult<MutexGuard<",
+            stringify!($output),
+            ">>\n
+            注意：使用该方法会阻塞直到成功获取锁或失败"
+        )]
+        #[inline]
+        pub fn $method_name(
+            &self
+        ) -> std::sync::LockResult<std::sync::MutexGuard<$output>> {
+            self.$field_name.lock()
+        }
+    };
+}
+#[allow(unused)]
+/// 生成get方法（单互斥锁，尝试获取）
+macro_rules! get_methods_single_try_mutex {
+    ($method_name: ident, $field_name: ident, $output: ty) => {
+        #[doc = concat!(" 通过锁获取 ",
+            stringify!($field_name),
+            "，输出 TryLockResult<MutexGuard<",
+            stringify!($output),
+            ">>"
+        )]
+        #[inline]
+        pub fn $method_name(
+            &self
+        ) -> std::sync::TryLockResult<std::sync::MutexGuard<$output>> {
+            self.$field_name.try_lock()
+        }
+    };
+}
+/// 生成get方法（元组双原子）
+macro_rules! get_methods_double_atomic {
+    ($method_name: ident, $field_name: ident, $output: ty) => {
+        #[doc = concat!(" 原子地获取 ",
+            stringify!($field_name),
+            "，使用Ordering::Relaxed ，输出 (",
+            stringify!($output),
+            ", ",
+            stringify!($output),
+            ")"
+        )]
+        #[inline]
+        pub fn $method_name(&self) -> ($output, $output) {
+            (
+                self.$field_name.0.load(Ordering::Relaxed),
+                self.$field_name.1.load(Ordering::Relaxed),
+            )
+        }
+    };
+}
+/// 生成set方法（单原子）
+macro_rules! set_methods_single_atomic {
+    ($method_name: ident, $field_name: ident, $input: ty) => {
+        #[doc = concat!(" 原子地设置 ",
+            stringify!($field_name),
+            "，接受 ",
+            stringify!($input),
+            "，使用Ordering::Relaxed"
+        )]
+        #[inline]
+        pub fn $method_name(&self, value: $input) {
+            self.$field_name.store(value, Ordering::Relaxed)
+        }
+    };
+}
+/// 生成set方法（单互斥锁，阻塞）
+macro_rules! set_methods_single_mutex {
+    ($method_name: ident, $field_name: ident, $input: ty) => {
+        #[doc = concat!(" 通过锁设置 ",
+            stringify!($field_name),
+            "，接受 ",
+            stringify!($input),
+            "，输出 Result<(), PoisonError<MutexGuard<'_, ",
+            stringify!($input),
+            ">>>\
+            注意：使用该方法会阻塞直到成功获取锁或失败"
+        )]
+        #[inline]
+        pub fn $method_name(
+            &self,
+            value: $input,
+        ) -> std::result::Result<
+            (),
+            std::sync::PoisonError<std::sync::MutexGuard<'_, $input>>,
+        > {
+            *self.$field_name.lock()? = value;
+            Ok(())
+        }
+    };
+}
+
+/// 生成set方法（单互斥锁，尝试获取）
+macro_rules! set_methods_single_try_mutex {
+    ($method_name: ident, $field_name: ident, $input: ty) => {
+        #[doc = concat!(" 通过锁尝试设置 ",
+            stringify!($field_name),
+            "，接受 ",
+            stringify!($input),
+            "，输出 Result<(), TryLockError<MutexGuard<'_, ",
+            stringify!($input),
+            ">>>"
+        )]
+        #[inline]
+        pub fn $method_name(
+            &self,
+            value: $input,
+        ) -> std::result::Result<
+            (),
+            std::sync::TryLockError<std::sync::MutexGuard<'_, $input>>,
+        > {
+            *self.$field_name.try_lock()? = value;
+            Ok(())
+        }
+    };
+}
+#[allow(unused)]
+/// 生成set方法（元组双原子）
+macro_rules! set_methods_double_atomic {
+    ($method_name: ident, $field_name: ident, $input: ty) => {
+        #[doc = concat!(" 原子地设置 ",
+            stringify!($field_name),
+            "，接受 (",
+            stringify!($input),
+            ", ",
+            stringify!($input),
+            ")，使用Ordering::Relaxed"
+        )]
+        #[inline]
+        pub fn $method_name(&self, value: ($input, $input)) {
+            self.$field_name.0.store(value.0, Ordering::Relaxed);
+            self.$field_name.1.store(value.1, Ordering::Relaxed);
+        }
+    };
+}
+
 /// 用于在主线程和显示线程之间交换状态的结构体。
 ///
 /// 该结构体包含：
@@ -123,6 +292,23 @@ impl ExchangeLayer {
     // =============================================================================================
     // 获取和设置字段的方法
     // =============================================================================================
+    get_methods_ref!(update_signal, update_signal, UpdateSignal);
+    get_methods_ref!(apply_signal, apply_signal, ApplySignal);
+    get_methods_double_atomic!(get_window_size, window_size, usize);
+    get_methods_double_atomic!(get_window_position, window_position, isize);
+    set_methods_single_mutex!(set_title, title, Option<String>);
+    set_methods_single_try_mutex!(try_set_title, title, Option<String>);
+    set_methods_single_atomic!(set_topmost, topmost, bool);
+    set_methods_single_atomic!(set_background_color, background_color, u32);
+    set_methods_single_atomic!(set_cursor_visibility, cursor_visibility, bool);
+    set_methods_single_atomic!(set_target_fps, target_fps, usize);
+    get_methods_single_atomic!(get_fps, fps, usize);
+    get_methods_double_atomic!(get_mouse_pos, mouse_pos, f32);
+    set_methods_single_mutex!(set_cursor_style, cursor_style, Option<CursorStyle>);
+    get_methods_double_atomic!(get_scaled_mouse_pos, scaled_mouse_pos, f32);
+    get_methods_single_atomic!(get_is_active, is_active, bool);
+    get_methods_single_atomic!(get_is_running, is_running, bool);
+
     /// 获取键盘状态处理对象
     pub fn get_key_state(&self) -> KeyState<'_> {
         KeyState::new(&self.key_state)
@@ -383,7 +569,6 @@ impl ExchangeLayer {
         }
     }
 }
-
 
 
 // =================================================================================================

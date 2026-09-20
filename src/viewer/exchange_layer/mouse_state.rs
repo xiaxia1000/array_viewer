@@ -204,7 +204,7 @@ impl<'el> MouseState<'el> {
 
     /* ---------- 重置 ---------- */
 
-    #[expect(dead_code, reason = "maybe use in the future")]
+    #[allow(unused)]
     /// 重置所有状态为 0，包括共享累积器。
     ///
     /// 该方法会同时清空 `dirty_map` 和本地的 `now`、`pre`。

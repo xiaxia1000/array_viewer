@@ -137,7 +137,7 @@ impl<'el> ScrollWheel<'el> {
     }
 
     /// 重置：同时清空共享累积器与本地行程。
-    #[expect(dead_code, reason = "maybe use in the future")]
+    #[allow(unused)]
     pub(crate) fn reset(&mut self) {
         self.accumulator.reset();
         self.x = 0.0;
